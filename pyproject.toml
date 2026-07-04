@@ -1,0 +1,14 @@
+[project]
+name = "robot-arm-ik"
+version = "0.1.0"
+description = "6-DOF inverse kinematics and trajectory planner for the UR5: damped least squares with singularity handling, synchronised trapezoidal trajectories, and a 3D pick-and-place animation."
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[dependency-groups]
+dev = ["pytest>=8", "matplotlib>=3.8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
