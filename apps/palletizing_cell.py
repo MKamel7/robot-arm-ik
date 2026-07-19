@@ -52,6 +52,9 @@ Z_PICK = 0.038                       # grasp-centre height at a part on the tabl
 Z_SAFE = 0.26                        # local lift/lower height
 DT = 0.04
 LAYER_DZ = 2 * PART                  # vertical pitch between pallet layers
+HOME_XY = (0.42, -0.27)              # ready pose above the supply bin (a palletizer waits here)
+HOME_Z = 0.30                        # (the zero pose points behind the base, avoid it)
+IK_SEED = np.array([0.0, -1.2, 1.5, -1.6, -1.57, 0.0])
 GRIP_JOINTS = [
     "g_right_driver_joint", "g_right_coupler_joint", "g_right_spring_link_joint",
     "g_right_follower_joint", "g_left_driver_joint", "g_left_coupler_joint",
@@ -259,7 +262,8 @@ def build_plan(planner):
     frames = []            # [q, grip_frac, carried_idx, snap(layer,xy) or None, caption]
     replans = rejected = placed = 0
     max_err = 0.0
-    q = np.zeros(6)
+    home_q = planner.ik(HOME_XY, HOME_Z, IK_SEED).q   # front-facing ready pose
+    q = home_q
     part_i = 0
 
     def emit(seq, gf, carried, caption):
@@ -307,7 +311,7 @@ def build_plan(planner):
         q = above_pal
         part_i += 1
 
-    seq, rep = planner.move(q, np.zeros(6), -1)
+    seq, rep = planner.move(q, home_q, -1)
     replans += rep
     emit(seq[1:], 0.0, -1, "")
     return frames, dict(replans=replans, rejected=rejected, placed=placed,
