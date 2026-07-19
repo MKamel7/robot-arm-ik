@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# MuJoCo runtime log
+MUJOCO_LOG.TXT
+
+# rendered videos live in the portfolio, not here
+docs/*.mp4

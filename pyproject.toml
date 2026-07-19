@@ -7,6 +7,9 @@ dependencies = ["numpy>=1.24"]
 
 [dependency-groups]
 dev = ["pytest>=8", "matplotlib>=3.8"]
+# Optional: the photoreal MuJoCo pick-and-place demo (apps/pick_and_place_mujoco.py).
+# The core library stays pure-NumPy; install these only for the physics-engine demo.
+sim = ["mujoco>=3.10", "imageio>=2.30", "imageio-ffmpeg>=0.5", "pillow>=10"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -19,7 +19,20 @@ UR5_DH = [
     (0.0,      0.0,       0.0823),
 ]
 
-# Joint limits (rad): UR5 allows +/- 2pi; keep the classic +/- 2pi range.
+# UR5e standard DH parameters. Same 6R topology as the UR5, but a taller base
+# (d1) and slightly different wrist offsets (d4, d5, d6). Cross-validated against
+# the MuJoCo Menagerie `universal_robots_ur5e` model: identity joint mapping,
+# tool position agrees to ~1 mm across random configurations.
+UR5E_DH = [
+    (0.0,      np.pi / 2, 0.1625),
+    (-0.425,   0.0,       0.0),
+    (-0.3922,  0.0,       0.0),
+    (0.0,      np.pi / 2, 0.1333),
+    (0.0,     -np.pi / 2, 0.0997),
+    (0.0,      0.0,       0.0996),
+]
+
+# Joint limits (rad): UR arms allow +/- 2pi; keep the classic +/- 2pi range.
 UR5_JOINT_LIMITS = np.array([[-2 * np.pi, 2 * np.pi]] * 6)
 
 
@@ -41,6 +54,21 @@ class SerialArm:
 
     dh: list = field(default_factory=lambda: list(UR5_DH))
     joint_limits: np.ndarray = field(default_factory=lambda: UR5_JOINT_LIMITS.copy())
+
+    @classmethod
+    def ur5(cls) -> "SerialArm":
+        """The Universal Robots UR5 (the library default), stated explicitly."""
+        return cls(dh=list(UR5_DH), joint_limits=UR5_JOINT_LIMITS.copy())
+
+    @classmethod
+    def ur5e(cls) -> "SerialArm":
+        """The Universal Robots UR5e. Same solver and Jacobian, UR5e geometry.
+
+        Its FK is cross-validated against the MuJoCo Menagerie UR5e model, so the
+        joint angles this arm's IK produces drive that model directly.
+        """
+        return cls(dh=[list(link) for link in UR5E_DH],
+                   joint_limits=UR5_JOINT_LIMITS.copy())
 
     @property
     def n(self) -> int:
