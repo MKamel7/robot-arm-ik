@@ -32,6 +32,30 @@ Four independent pieces, each a distinct capability:
 
 The pick-and-place demo (`apps/pick_and_place.py`) ties it together: reach to a pick location, grasp, carry, release, and return home, with the gripper state shown on the tool tip.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph CORE["armik core (pure NumPy)"]
+        direction TB
+        FK["Forward kinematics<br/>robot.py"]
+        JAC["Geometric Jacobian<br/>robot.py"]
+        IK["IK: damped least squares<br/>+ closed-form analytic<br/>ik.py / analytical.py"]
+        TRAJ["Trajectory planning<br/>trajectory.py"]
+        FK --> IK
+        JAC --> IK
+        IK --> TRAJ
+    end
+
+    PLANNER["Planner<br/>apps/palletizing_cell.py<br/>collision-aware routing (MuJoCo contact queries)<br/>+ reachability validation"]
+    SCENE["MuJoCo scene<br/>UR5e + Robotiq 2F-85<br/>(scene config)"]
+    OUT["GIF / MP4<br/>docs/*.gif"]
+
+    CORE --> PLANNER --> SCENE --> OUT
+```
+
+armik never touches MuJoCo directly: it solves poses and timing in plain NumPy, and the Planner is the only place that queries MuJoCo (contact checks for re-routing, forward kinematics for reachability) before handing the resulting joint path to the scene for rendering. *Scene parameters (table height, grid layout, home pose, and the like) are being consolidated out of inline constants into a single scene config, so the same Planner/scene pipeline can be re-targeted without editing code.*
+
 ## Photoreal demos (MuJoCo)
 
 Two optional demos render the kinematics in the [MuJoCo](https://mujoco.org) physics engine with a real UR5e and a Robotiq 2F-85 gripper. In both, armik does all the kinematics (`SerialArm.ur5e()` forward kinematics + damped-least-squares IK solve each waypoint, `joint_trajectory` builds the timed motion) and MuJoCo only renders the result and animates the gripper.

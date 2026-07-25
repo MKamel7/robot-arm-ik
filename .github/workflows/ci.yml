@@ -21,3 +21,64 @@ jobs:
         run: uv sync --group dev
       - name: Run tests
         run: uv run pytest
+
+  mujoco-sim:
+    # Separate job so the fast pure-NumPy `test` job above never waits on this.
+    # Covers the optional `sim` extras (mujoco, imageio, pillow) used by
+    # apps/palletizing_cell.py and apps/pick_and_place_mujoco.py, and proves
+    # MuJoCo can actually render headlessly on the runner (no display/GPU).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install OS packages for headless MuJoCo rendering (osmesa)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libosmesa6-dev libgl1-mesa-glx libglfw3
+      - name: Install dependencies (dev + sim)
+        run: uv sync --group dev --group sim
+      - name: Headless MuJoCo render smoke test
+        # MUJOCO_GL=osmesa: software (CPU) offscreen rendering, no Xvfb/GPU needed.
+        env:
+          MUJOCO_GL: osmesa
+        run: |
+          uv run python - <<'PY'
+          import mujoco
+          import numpy as np
+
+          xml = """
+          <mujoco>
+            <worldbody>
+              <light diffuse="0.5 0.5 0.5" pos="0 0 3"/>
+              <geom type="plane" size="1 1 0.1" rgba="0.8 0.8 0.8 1"/>
+              <body pos="0 0 0.5">
+                <joint type="free"/>
+                <geom type="box" size="0.1 0.1 0.1" rgba="1 0 0 1"/>
+              </body>
+            </worldbody>
+          </mujoco>
+          """
+          model = mujoco.MjModel.from_xml_string(xml)
+          data = mujoco.MjData(model)
+          mujoco.mj_forward(model, data)
+
+          renderer = mujoco.Renderer(model, height=64, width=64)
+          renderer.update_scene(data)
+          pixels = renderer.render()
+
+          assert pixels is not None, "renderer.render() returned None"
+          assert pixels.size > 0, "renderer.render() returned an empty array"
+          assert np.any(pixels != 0), "rendered frame is all zeros (osmesa isn't actually rendering)"
+          print(f"MuJoCo offscreen render OK: shape={pixels.shape}, dtype={pixels.dtype}")
+          PY
+      - name: Run test suite (with sim extras installed)
+        # Runs the full suite, not just a MuJoCo-specific file: today that's
+        # still just the 24 pure-NumPy tests, but this is what will pick up
+        # tests/test_palletizing_cell.py (Planner/build_plan, needs MuJoCo)
+        # once that lands, instead of silently no-opping.
+        env:
+          MUJOCO_GL: osmesa
+        run: uv run pytest

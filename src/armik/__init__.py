@@ -9,10 +9,12 @@ from .trajectory import (
     multi_waypoint_trajectory,
     cartesian_line,
 )
+from .rrt import rrt_connect
 
 __all__ = [
     "SerialArm", "dh_transform", "UR5_DH", "UR5_JOINT_LIMITS",
     "matrix_from_rotvec", "rotvec_from_matrix", "slerp", "skew",
     "solve_ik", "pose_error", "manipulability", "IKResult", "analytical_ik",
     "joint_trajectory", "multi_waypoint_trajectory", "cartesian_line",
+    "rrt_connect",
 ]
