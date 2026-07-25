@@ -105,6 +105,108 @@ def multi_waypoint_trajectory(waypoints, *, v_max=1.0, a_max=2.0, dt=0.02):
     return np.concatenate(t_all), np.vstack(q_all), np.vstack(qd_all)
 
 
+def path_trajectory(path, *, v_max=1.0, a_max=2.0, dt=0.02, corner_rest=None):
+    """Time-parameterise a dense path, optionally resting at sharp corners.
+
+    `corner_rest` (radians) is the turn angle above which a vertex counts as a
+    real corner. Cruising through a corner at speed reverses joint velocity in
+    a single step, which is an unbounded acceleration no controller can track
+    -- under physics execution that showed up as ~0.9 rad of tracking error.
+    Splitting there and coming to rest keeps every segment trackable while
+    still flowing continuously along the straight runs between corners.
+
+    None (default) means never rest; the whole path is one profile.
+    """
+    if corner_rest is None:
+        return _path_profile(path, v_max=v_max, a_max=a_max, dt=dt)
+
+    P = np.asarray([np.asarray(p, dtype=float) for p in path], dtype=float)
+    keep = [0]
+    for i in range(1, len(P)):
+        if np.linalg.norm(P[i] - P[keep[-1]]) > 1e-12:
+            keep.append(i)
+    P = P[keep]
+    if len(P) < 3:
+        return _path_profile(P, v_max=v_max, a_max=a_max, dt=dt)
+
+    seg = np.diff(P, axis=0)
+    unit = seg / np.linalg.norm(seg, axis=1)[:, None]
+    # angle between consecutive segment directions; > corner_rest is a corner
+    cosang = np.clip(np.sum(unit[1:] * unit[:-1], axis=1), -1.0, 1.0)
+    corners = [i + 1 for i, a in enumerate(np.arccos(cosang)) if a > corner_rest]
+
+    bounds = [0] + corners + [len(P) - 1]
+    t_all, q_all, qd_all, t_off = [], [], [], 0.0
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        if b <= a:
+            continue
+        t, q, qd = _path_profile(P[a:b + 1], v_max=v_max, a_max=a_max, dt=dt)
+        if t_all:                              # drop the duplicated boundary sample
+            t, q, qd = t[1:], q[1:], qd[1:]
+        if len(t) == 0:
+            continue
+        t_all.append(t + t_off)
+        q_all.append(q)
+        qd_all.append(qd)
+        t_off = t_all[-1][-1]
+    if not t_all:
+        return _path_profile(P, v_max=v_max, a_max=a_max, dt=dt)
+    return np.concatenate(t_all), np.vstack(q_all), np.vstack(qd_all)
+
+
+def _path_profile(path, *, v_max=1.0, a_max=2.0, dt=0.02):
+    """Time-parameterise an existing dense geometric path along its arc length.
+
+    The counterpart to multi_waypoint_trajectory. That one chains a trapezoid
+    per waypoint and so comes to rest at *every* waypoint -- correct when each
+    waypoint is a stop that matters (grasp, release), badly wrong when the
+    points are merely samples of a path the tool should flow along. A 3-leg
+    lift/traverse/lower detour sampled into ~50 points becomes ~50 stop-starts,
+    which reads as a violent stutter.
+
+    Here `path` is treated as a fixed polyline to FOLLOW: one acceleration at
+    the start, a cruise, one deceleration at the end, with the profile applied
+    to arc length rather than to each segment. The output lies on the polyline
+    (samples are interpolated between adjacent input points, never chords cut
+    across them), so a path that was collision-checked densely stays checked.
+
+    Returns (t, q, qd), with qd the true per-joint reference velocity.
+    """
+    P = np.asarray([np.asarray(p, dtype=float) for p in path], dtype=float)
+    if P.ndim != 2:
+        raise ValueError("path must be a sequence of joint configurations")
+    keep = [0]
+    for i in range(1, len(P)):                 # drop repeated points: a zero-length
+        if np.linalg.norm(P[i] - P[keep[-1]]) > 1e-12:   # segment has no direction
+            keep.append(i)
+    P = P[keep]
+    n = P.shape[1]
+    if len(P) < 2:
+        return np.array([0.0]), P[:1].copy(), np.zeros((1, n))
+
+    seg = np.diff(P, axis=0)
+    seg_len = np.linalg.norm(seg, axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(seg_len)])
+    total = float(cum[-1])
+    unit = seg / seg_len[:, None]              # per-segment direction
+
+    v_max = np.broadcast_to(v_max, (n,)).astype(float)
+    a_max = np.broadcast_to(a_max, (n,)).astype(float)
+    # Joint j moves at sdot * total * unit[k, j] on segment k, so the tightest
+    # scaling limit over every segment and joint is what keeps all of them legal.
+    denom = total * np.abs(unit) + 1e-12
+    sdot_max = float(np.min(v_max[None, :] / denom))
+    sddot_max = float(np.min(a_max[None, :] / denom))
+
+    t, s, sdot = _trapezoidal_profile(sdot_max, sddot_max, dt)
+    u = s * total                              # arc length travelled
+    idx = np.clip(np.searchsorted(cum, u, side="right") - 1, 0, len(seg_len) - 1)
+    frac = ((u - cum[idx]) / seg_len[idx])[:, None]
+    q = P[idx] + seg[idx] * frac
+    qd = sdot[:, None] * total * unit[idx]
+    return t, q, qd
+
+
 def cartesian_line(arm: SerialArm, T_start, T_target, q_init, *,
                    steps=50, ik_kwargs=None):
     """Straight-line Cartesian path from T_start to T_target.

@@ -49,7 +49,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from armik import (                                                        # noqa: E402
     SerialArm, solve_ik, joint_trajectory, cartesian_line,
-    multi_waypoint_trajectory, rrt_connect,
+    multi_waypoint_trajectory, path_trajectory, rrt_connect,
 )
 from armik.rotations import matrix_from_rotvec                            # noqa: E402
 
@@ -107,7 +107,14 @@ class CellConfig:
     fixture_half_h: float = 0.15                # fixture column half-height (0.30 m tall)
     fixture_half_w: tuple = (0.05, 0.06)        # fixture column half-extents in x, y
     bin_grid: tuple = (0.46, -0.30, 4, 2, 0.058, 0.075)      # cx, cy, nx, ny, sx, sy: 8 supply cells
-    pallet_grid: tuple = (0.37, 0.30, 2, 2, 0.075, 0.075)    # 2x2 pallet footprint
+    # 2x2 pallet footprint. y is 0.36 rather than 0.30 to keep the pallet out of
+    # the fixture's shadow: at y=0.30 the corner nearest the fixture has no
+    # collision-free IK solution on the arm's usual branch, so ik_clear had to
+    # jump to a branch ~7 rad away to place there and jump back afterwards --
+    # twice per plan, which swung shoulder_pan across 160 deg instead of the
+    # 87 deg band the demo ran in before. 6 cm further out, the ordinary branch
+    # is clear, ik_clear never fires, and the posture stays consistent.
+    pallet_grid: tuple = (0.37, 0.36, 2, 2, 0.075, 0.075)
     unreachable_xy: tuple = (0.90, 0.30)        # outside the arm's workspace
     reach_max: float = 0.82                     # UR5e workspace radius for a downward grasp
     lift_heights: tuple = (0.48, 0.54, 0.60, 0.66)  # lift-over heuristic's candidate clearances
@@ -117,7 +124,8 @@ class CellConfig:
     rrt_seed: object = None                     # fixed int -> deterministic (tests); None in prod
     v_max: float = 2.6                          # joint vel/accel limits shared by every re-timing
     a_max: float = 6.5                          # pass (direct moves, lift-over detour, RRT route)
-    retime_max_step: float = 0.2                # Planner._decimate: waypoint spacing before re-timing
+    corner_rest_angle: float = 0.5              # rad; path_trajectory rests at turns sharper than this
+    branch_gap_max: float = 0.1                 # rad; see Planner._move_impl's detour branch check
     physics_clearance_margin: float = 0.02      # metres; see build_cell(physics=True)'s docstring.
     # Planner.move's collision-aware routing only ever checks the KINEMATIC
     # reference path (Planner._collides teleports `q` into a fresh
@@ -380,6 +388,44 @@ class Planner:
     def ik(self, xy, z, seed):
         return solve_ik(self.arm, tool_down_pose(xy[0], xy[1], z + self.gl), seed)
 
+    def front_seed(self, xy):
+        """cfg.ik_seed with the base joint pre-aimed at the target's bearing.
+
+        cfg.ik_seed pins the base at 0 rad, which is not a neutral choice: a
+        damped-least-squares solve started there can settle on the shoulder
+        branch that reaches the target *backwards*, swinging the base ~180 deg
+        so the arm comes over its own shoulder instead of simply turning to
+        face the work. Because every later waypoint is seeded from the previous
+        configuration for continuity, whichever branch the FIRST solve picks
+        propagates through the entire plan -- the cell used to run with
+        shoulder_pan between 49 and 209 deg for bin and pallet targets whose
+        actual bearings are only -42 to +45 deg.
+
+        Aiming the base at atan2(y, x) starts the solve in the half of joint
+        space that faces the target, so it converges on the natural front
+        posture. That also clears the pallet corner nearest the fixture, which
+        collides at rest on the backward branch and is the sole reason
+        ik_clear ever had to go hunting for another one.
+
+        NOT wired into build_plan yet, and the reason is a cell-layout problem
+        rather than a kinematics one. Facing the work means swinging the base
+        through bearing 0, which is exactly where the fixture stands (r = 0.41,
+        inside both the bin at r ~ 0.56 and the pallet at r ~ 0.45), so the
+        forearm sweeps through the column: measured 14 RRT fallbacks, 4
+        transfers with no route at all, and 51 colliding frames, against 0/0/0
+        on the backward branch. The backward reach is ugly but it is what the
+        current obstacle placement leaves room for. Shortening the fixture
+        makes it worse (104 and 143 colliding frames at 0.20 m and 0.16 m,
+        since the cheap lift-over then succeeds on lower paths that still clip
+        it) and raising lift_heights changes nothing at all. Moving the
+        fixture outward to x = 0.58 was the best of the sweep and still failed
+        (4 no-route, 32 colliding). Making this usable needs the bin, pallet
+        and fixture repositioned together so the obstacle sits off the sweep
+        while still genuinely blocking the direct path."""
+        seed = np.array(self.cfg.ik_seed, dtype=float)
+        seed[0] = np.arctan2(xy[1], xy[0])
+        return seed
+
     def ik_clear(self, xy, z, seed):
         """Like ik(), but for grasp/place poses whose joint solution becomes a
         fixed waypoint the four short bin/pallet legs actually rest at (not
@@ -396,10 +442,24 @@ class Planner:
         So fix it at the source -- retry from a second, differently-branched
         seed (cfg.ik_seed_alt) and take it only if it both succeeds and
         clears the fixture at rest; otherwise fall back to the primary
-        result unchanged, same as a plain ik() call."""
+        result unchanged, same as a plain ik() call.
+
+        Known cosmetic cost: at the problem pallet corner the branch this
+        lands on is ~5.12 rad from the incoming configuration, so the arm
+        visibly contorts to place that part and unwinds again. Picking the
+        NEAREST collision-free branch instead (analytical_ik returns up to 8;
+        the closest clear one there is 3.48 rad) was tried and reverted --
+        changing qb changed which lift-over detours could land on it, and
+        under the physics clearance margin some transfers then failed to
+        route at all. The contortion is really a scene-geometry problem: that
+        corner sits in the fixture's shadow (pallet x 0.408 vs fixture x
+        0.41) and EVERY branch there is >= 3.39 rad from the working
+        configuration, so it wants fixing in the cell layout rather than by
+        swapping IK branches underneath the planner."""
         res = self.ik(xy, z, seed)
         if not res.success or not self._collides(res.q, -1):
             return res
+
         alt = self.ik(xy, z, self.cfg.ik_seed_alt)
         if alt.success and not self._collides(alt.q, -1):
             return alt
@@ -471,19 +531,31 @@ class Planner:
         return kept
 
     def _retime_qqd(self, waypoints, carried):
-        """Like _retime, but also returns the per-sample qd
-        multi_waypoint_trajectory already computes (see _joint_seg_qqd)."""
+        """Like _retime, but also returns the per-sample reference qd.
+
+        A detour's waypoints are samples of a path to FLOW along, not stops
+        that matter, so this uses path_trajectory (one accel / cruise / decel
+        over the whole route) rather than multi_waypoint_trajectory, which
+        rests at every waypoint by design. Feeding a ~50-sample Cartesian
+        detour to the latter produced a stop-start lurch at every kept
+        waypoint -- measured at 137 mid-move near-stops across the default
+        plan, with 41% of moving time spent below a quarter of v_max.
+
+        This also removes the reason _decimate existed. Decimating traded
+        geometric fidelity for fewer pauses, and the chords it cut between
+        kept points could bow into obstacles the fine path avoided, which is
+        why the old code needed a collision-checked backoff ladder.
+        path_trajectory instead interpolates *between adjacent* input points,
+        so its output lies on the already-checked polyline. The collision
+        re-check stays as a cheap invariant, not a fallback ladder.
+        """
         cfg = self.cfg
-        for max_step in (cfg.retime_max_step, cfg.retime_max_step / 4, 0.0):
-            pts = self._decimate(waypoints, max_step) if max_step > 0 else \
-                [np.asarray(w, dtype=float) for w in waypoints]
-            if len(pts) < 2:
-                return pts, [np.zeros_like(p) for p in pts]
-            _, q, qd = multi_waypoint_trajectory(pts, v_max=cfg.v_max, a_max=cfg.a_max, dt=cfg.dt)
-            q, qd = list(q), list(qd)
-            if not self._path_collides(q, carried):
-                return q, qd
-        return q, qd    # last resort: full-density retime (geometrically ~= the checked path)
+        pts = [np.asarray(w, dtype=float) for w in waypoints]
+        if len(pts) < 2:
+            return pts, [np.zeros_like(p) for p in pts]
+        _, q, qd = path_trajectory(pts, v_max=cfg.v_max, a_max=cfg.a_max, dt=cfg.dt,
+                                   corner_rest=cfg.corner_rest_angle)
+        return list(q), list(qd)
 
     def _retime(self, waypoints, carried):
         """Re-parameterize a search's geometric waypoints (lift-over Cartesian
@@ -561,6 +633,32 @@ class Planner:
             if not o3:
                 continue
             path = list(p1) + list(p2[1:]) + list(p3[1:])
+            # cartesian_line solves IK for the tool POSE at each sample, so its
+            # last config need only reproduce fk(qb) -- it can sit on a
+            # different IK branch than qb itself (same tool pose, elbow or
+            # wrist flipped). The caller then carries on from qb, so a detour
+            # that quietly ends somewhere else leaves a gap between this
+            # segment and the next: measured as a single-frame 180 deg wrist
+            # flip, a teleport no velocity limit was ever applied to. Reject
+            # such a route rather than splicing a branch-change move onto the
+            # end of it: that move is a large unplanned reconfiguration, and
+            # forcing it through made previously-routable transfers fail
+            # outright ("NO ROUTE FOUND") once the physics clearance margin
+            # was active. Falling through to the next clearance height, or to
+            # RRT (which plans in joint space and so lands exactly on qb), is
+            # both simpler and strictly safer.
+            # Distinguish the two cases by size: a numerical residual from the
+            # DLS solve is a tiny fraction of a radian and is closed by ending
+            # exactly on qb, whereas a different branch is radians away and the
+            # route has to be rejected. (Demanding an exact match instead
+            # rejected every detour, since cartesian_line's IK never reproduces
+            # qb to machine precision, and pushed all 17 transfers onto RRT.)
+            gap = float(np.linalg.norm(np.asarray(path[-1], dtype=float)
+                                       - np.asarray(qb, dtype=float)))
+            if gap > cfg.branch_gap_max:
+                continue
+            if gap > 1e-9:
+                path = path + [np.asarray(qb, dtype=float)]
             if not self._path_collides(path, carried):
                 q, qd = self._retime_qqd(path, carried)
                 return q, qd, True, "COLLISION AVOIDED  re-routing"
@@ -606,7 +704,10 @@ def build_plan(planner):
     frames = []
     replans = rejected = placed = rrt_routes = failed_routes = 0
     max_err = 0.0
-    home_q = planner.ik(cfg.home_xy, cfg.home_z, cfg.ik_seed).q   # front-facing ready pose
+    home_q = planner.ik(cfg.home_xy, cfg.home_z, cfg.ik_seed).q   # ready pose
+    # NOTE: seeding this with planner.front_seed(cfg.home_xy) instead gives the
+    # natural front-facing posture the whole plan inherits -- but the current
+    # cell layout cannot be routed that way. See front_seed's docstring.
     q = home_q
     part_i = 0
     zero_qd = np.zeros(6)
@@ -927,7 +1028,22 @@ def render(mujoco, model, planner, frames, meta, height, width, render_stride=4,
     return imgs
 
 
-def save_gif(frames, path, stride=2, fps=15, scale=0.46, colors=84):
+def save_gif(frames, path, stride=1, fps=20, scale=0.38, colors=72):
+    """Write the README hero GIF.
+
+    GIF is the only format GitHub plays inline in a README, and it is a poor
+    fit for this: no interframe motion compensation, so cost scales almost
+    linearly with frame count. That forces a three-way trade between smoothness
+    (frames), size, and resolution -- the MP4 (save_mp4) has none of these
+    limits and is the better artefact wherever a real player is available.
+
+    stride=1 keeps every rendered frame, since sparse sampling is what made an
+    earlier version strobe; the resolution is spent down instead (scale 0.38)
+    to pay for those frames. disposal=1 leaves each frame in place rather than
+    restoring the background first, which lets the encoder emit only the
+    changed region -- worth ~18% here, measured, because the camera is fixed
+    and much of the scene never moves.
+    """
     from PIL import Image
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -937,7 +1053,7 @@ def save_gif(frames, path, stride=2, fps=15, scale=0.46, colors=84):
     pil = [Image.fromarray(f).resize((w, h), Image.LANCZOS).convert(
         "P", palette=Image.ADAPTIVE, colors=colors) for f in picked]
     pil[0].save(path, save_all=True, append_images=pil[1:],
-                duration=int(1000 / fps), loop=0, optimize=True, disposal=2)
+                duration=int(1000 / fps), loop=0, optimize=True, disposal=1)
     print(f"saved {path}  ({len(pil)} frames, {w}x{h}, {path.stat().st_size / 1e6:.1f} MB)")
 
 
@@ -946,8 +1062,16 @@ def save_mp4(frames, path, fps=30):
     import imageio.v2 as imageio
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    imageio.mimwrite(path, frames, fps=fps, codec="libx264", quality=8,
-                     macro_block_size=8, output_params=["-pix_fmt", "yuv420p"])
+    # Rate-control by CRF, not imageio's `quality` (which maps to -qscale and
+    # ignores how compressible the content is). The camera is fixed and most
+    # of every frame is static, so constant-quality encoding gets the same
+    # picture in a fraction of the bits: the default plan came out at 22 MB
+    # under quality=8 (8.5 Mbit/s) versus 8.7 MB at CRF 18, which is visually
+    # transparent for this content. +faststart moves the index to the front so
+    # it starts playing before the whole file has downloaded.
+    imageio.mimwrite(path, frames, fps=fps, codec="libx264", macro_block_size=8,
+                     output_params=["-crf", "18", "-preset", "slow",
+                                    "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
     print(f"saved {path}  ({len(frames)} frames @ {fps} fps, {path.stat().st_size / 1e6:.1f} MB)")
 
 
@@ -1012,8 +1136,20 @@ def main():
           f"re-plans {meta['replans']} (rrt {meta['rrt_routes']}, failed {meta['failed_routes']}) | "
           f"rejected {meta['rejected']} | max IK err {meta['accuracy_mm']:.3f} mm"
           + ("  [physics]" if args.physics else ""))
-    # a smoother render for video; sparser for the GIF
-    render_stride = 3 if args.mp4 else 4
+    # Displayed-frame sampling. The motion between two DISPLAYED frames is
+    # v_max * stride * dt, so the re-timing limits -- not the frame count --
+    # set how smooth the output can possibly look. At cfg.v_max=2.6 rad/s and
+    # dt=0.04, stride 8 (the GIF path: render_stride 4 x save_gif stride 2)
+    # allows 0.83 rad = 48 deg of joint travel per displayed frame, which
+    # strobes badly on the fast segments. Measured on the default plan:
+    # end-effector travel per displayed frame is a median 64 mm / max 407 mm
+    # at stride 8, versus 16 mm / 127 mm at stride 2 (joint travel likewise
+    # 8.8 deg median / 47.7 deg max, versus 2.4 / 11.9). The motion is bursty
+    # (67% of moving frames run below 30% of v_max, 6% saturate it), so a
+    # sparse fixed stride samples the bursts far too coarsely.
+    # MP4 can afford the frames that fixes this; GIF cannot (stride 2 over the
+    # full plan is ~1230 frames, ~50 MB), so the GIF stays sparse by necessity.
+    render_stride = 1 if args.mp4 else 4
     track_err = [] if args.physics else None
     imgs = render(mujoco, model, planner, frames, meta, args.height, args.width, render_stride,
                  physics=args.physics, track_err_out=track_err)
@@ -1023,7 +1159,10 @@ def main():
               f"max {track_err.max():.4f}  final {track_err[-1].max():.4f}")
 
     if args.mp4:
-        save_mp4(imgs, ROOT / "docs" / "palletizing_cell.mp4")
+        # 60 fps over render_stride=2 replays the 98 s cycle at 4.8x in ~21 s.
+        # Playback speed is stride * dt * fps; smoothness is set by stride
+        # alone, so the speed-up here costs nothing in strobing.
+        save_mp4(imgs, ROOT / "docs" / "palletizing_cell.mp4", fps=60)
     if args.save:
         save_gif(imgs, ROOT / "docs" / "palletizing_cell.gif")
     if not (args.mp4 or args.save):

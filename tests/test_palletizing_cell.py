@@ -117,6 +117,35 @@ def test_default_plan_has_no_colliding_frames(planner, plan_result):
     assert colliding == []
 
 
+def test_video_stride_keeps_displayed_motion_smooth(plan_result):
+    """The MP4 path samples every `render_stride`-th plan frame, so the motion
+    an actual viewer sees between two DISPLAYED frames is bounded by
+    cfg.v_max * stride * dt -- the re-timing limits, not the frame count, set
+    how smooth the output can be. Time-optimal re-timing made the plan bursty
+    (most frames run well under v_max, a few saturate it), so a stride chosen
+    without reference to v_max strobes on exactly those fast segments: at
+    stride 8 the tool jumps a median 64 mm and up to 407 mm per displayed
+    frame, which is what made the first Phase 1 render unwatchable.
+
+    Guard both ends: the analytic worst case implied by the limits, and the
+    empirical travel over the real default plan. Raising cfg.v_max or the MP4
+    stride without re-checking playback should fail here rather than silently
+    shipping a strobing video."""
+    frames, _meta = plan_result
+    cfg = DEFAULT_CONFIG
+    stride = 1                                  # main()'s MP4 render_stride
+
+    # analytic bound: what the velocity limit alone permits per displayed frame
+    assert np.degrees(cfg.v_max * stride * cfg.dt) < 8.0
+
+    # empirical: end-effector travel per displayed frame over the real plan
+    arm = SerialArm.ur5e()
+    ee = np.array([arm.fk(f[0])[:3, 3] for f in frames[::stride]])
+    step_mm = np.linalg.norm(np.diff(ee, axis=0), axis=1) * 1000
+    assert np.percentile(step_mm, 50) < 25.0
+    assert step_mm.max() < 80.0
+
+
 def test_default_scene_never_needs_rrt(plan_result):
     """With DEFAULT_CONFIG's single fixture, the cheap lift-over heuristic
     already clears every blocked move (its 4 fixed candidate heights sit well
