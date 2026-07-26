@@ -26,6 +26,7 @@ setup(
             "plan_execute_smoke = armik_moveit.plan_execute_smoke:main",
             "populate_scene = armik_moveit.scene:main",
             "scene_routing_check = armik_moveit.scene_routing_check:main",
+            "palletize = armik_moveit.palletizing:main",
         ],
     },
 )
