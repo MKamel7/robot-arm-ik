@@ -1,18 +1,79 @@
-# Phase 2: ROS 2 + MoveIt 2 (UR5e)
+# ROS 2 + MoveIt 2: industrial palletizing cell (Phase 2)
 
-This directory is the ROS 2 side of the project: a colcon workspace that brings up the UR5e under [MoveIt 2](https://moveit.picknik.ai/) so motions are planned by MoveIt/OMPL and executed on `ros2_control`, instead of the standalone MuJoCo playback used by the pure-Python demos in `../apps`. The kinematics library (`armik`) stays untouched; this is the industry-standard framework the same arm runs on.
+The ROS 2 side of this project: the same UR5e, now driven by the framework
+industry actually deploys. Where `../apps` solves and animates the kinematics in
+pure NumPy, this stands up a full **industrial palletizing cell** on **ROS 2
+Jazzy + MoveIt 2**, a pedestal-mounted UR5e with a Robotiq 2F-85 gripper that
+transfers parts from a supply bin, over a divider wall, onto a pallet.
 
-It targets **ROS 2 Jazzy on Ubuntu 24.04**.
+Targets ROS 2 Jazzy on Ubuntu 24.04. Runs on mock hardware (no physical robot).
 
-## Package: `armik_moveit`
+## The cell
 
-Phase 2 lands in stages. Step 1 (this commit) is the bringup: a single launch file that stands up the UR5e with mock hardware and MoveIt, and a headless smoke test that plans and executes a motion to prove the toolchain end to end.
+A pedestal-mounted UR5e works downward over a table (the standard palletizing
+layout), with:
+
+- a **supply bin** of four colour-coded parts,
+- a **pallet** filled back-to-front,
+- a **separator wall** standing between them,
+- a **Robotiq 2F-85** gripper doing real top-down grasps.
 
 ```
-ros2/
-  src/armik_moveit/
-    launch/ur5e_moveit.launch.py      one-command UR5e + MoveIt bringup (mock hardware)
-    armik_moveit/plan_execute_smoke.py  headless Plan-and-Execute verification
+ros2 launch armik_moveit ur5e_gripper_moveit.launch.py   # RViz opens
+ros2 run   armik_moveit palletize                        # run the cell
+```
+
+## How it moves the arm (the industrial approach)
+
+This is built the way a production cell is, not with one general-purpose
+sampling planner (see [`docs/ENGINEERING_PLAN.md`](docs/ENGINEERING_PLAN.md)):
+
+- **Deterministic descents.** The straight-down approach and straight-up retreat
+  are **Pilz Industrial Motion Planner `LIN`** moves (linear Cartesian), the same
+  motion profile a real palletizer runs.
+- **Obstacle-avoiding transfers.** **OMPL** plans the bin-to-pallet transfer
+  around the separator wall, to a fixed joint configuration (a via-point over the
+  wall keeps each plan short and reliable).
+- **Consistent top-down grasp.** Every station's joint configuration comes from a
+  single `/compute_ik` seed, so the tool always arrives pointing straight down in
+  the same elbow-up posture, no wonky angles, wrist flips, or behind-the-base
+  swings.
+- **Attach on contact.** The part attaches to the gripper at the true grasp
+  offset and rigidly follows the tool (mock hardware has no physics grasp).
+- **Reachability pre-check** rejects out-of-workspace slots instead of faking
+  them; the pallet fills **back-to-front** so no placement reaches over a placed
+  part; **production metrics** (placed / rejected / re-plans / cycle time) print
+  at the end.
+
+## Results (mock hardware, headless-verified)
+
+| Metric | Value |
+| --- | --- |
+| Parts placed | **4 / 4** |
+| Re-plans | 0-2 |
+| Cycle time | **~9-10 s/part** |
+| Grasp | consistent top-down |
+
+An earlier naive version (OMPL, position-only goals) ran at ~100 s/part and
+2/4; the industrial rewrite is ~10x faster and reliable. The story of that
+rewrite (deterministic planning, defined grasps, attach-on-contact) is the
+engineering content, see the plan and the verification records in `docs/`.
+
+## Package `armik_moveit`
+
+```
+ros2/src/armik_moveit/
+  description/ur5e_robotiq.urdf.xacro   UR5e + 2F-85 + pedestal (one model for control + MoveIt)
+  config/                               SRDF, kinematics, joint/cartesian limits, controllers, RViz
+  launch/
+    ur5e_gripper_moveit.launch.py       one-command bringup (control + MoveIt, RViz optional)
+    ur5e_moveit.launch.py               bare-arm bringup (step 1)
+    view_ur5e_robotiq.launch.py         description-only model viewer
+  armik_moveit/
+    palletizing.py        the palletizing cell            (ros2 run armik_moveit palletize)
+    scene.py              cell geometry + planning scene   (populate_scene)
+    scene_routing_check.py collision-aware routing test    (scene_routing_check)
+    plan_execute_smoke.py headless Plan-and-Execute check
 ```
 
 ## Build
@@ -24,33 +85,27 @@ colcon build --packages-select armik_moveit
 source install/setup.bash
 ```
 
-## Run
+Requires: `ros-jazzy-desktop`, `ros-jazzy-ur`, `ros-jazzy-moveit`,
+`ros-jazzy-ur-moveit-config`, `ros-jazzy-robotiq-description`,
+`ros-jazzy-robotiq-controllers`.
 
-Bring up the arm and MoveIt (RViz on by default; drag the interactive marker and hit **Plan & Execute**):
+## Verification
 
-```bash
-ros2 launch armik_moveit ur5e_moveit.launch.py
-```
+Each capability has a recorded check under `docs/`:
 
-Headless (no display), then verify planning + execution from the command line:
+- `phase2_step1_verification.txt` — UR5e MoveIt bringup, Plan and Execute
+- `phase2_gripper_verification.txt` — 2F-85 open/close as a MoveIt end effector
+- `phase2_planning_scene_verification.txt` — collision-aware routing around the wall
+- `phase2_palletizing_verification.txt` — full 4/4 palletizing run + metrics
 
-```bash
-ros2 launch armik_moveit ur5e_moveit.launch.py launch_rviz:=false
-ros2 run armik_moveit plan_execute_smoke     # prints RESULT: PASS on success
-```
+Two Jazzy specifics baked into the launch (easy to miss): the mock-hardware flag
+is `use_mock_hardware`, and `ur_control` can leave the trajectory controller
+inactive so the launch re-activates it.
 
-The smoke test reads the current joint state, asks MoveGroup (OMPL) to plan to a nearby reachable target, executes it on the mock hardware, and checks the arm reached the target (MoveItErrorCode SUCCESS and joint error under 0.05 rad).
+## Status and roadmap
 
-## Two Jazzy-specific fixes baked into the launch
-
-Getting a bare UR5e MoveIt bringup working on Jazzy needed two corrections that are easy to miss:
-
-1. **Mock hardware flag renamed.** The argument is `use_mock_hardware` (it was `use_fake_hardware` on earlier distros). Without it the driver tries to reach a real robot over TCP and the controllers never come up.
-2. **Trajectory controller left inactive.** `ur_control.launch.py` intermittently finishes with `scaled_joint_trajectory_controller` in the `inactive` state after its consistent-controller-set spawn, so MoveIt has nothing to execute on. The launch activates it (only if it is not already active) once bringup settles.
-
-A third, cosmetic one: when `ur_moveit.launch.py` is *included* (rather than run directly) it must not be wrapped in a `TimerAction`, or its `declare_arguments()` scoping breaks and `warehouse_sqlite_path` stops resolving.
-
-## Status
-
-- **Step 1 (bringup + Plan & Execute):** done, verified headless (`plan_execute_smoke` returns PASS).
-- Next: fixture/bin/pallet as a MoveIt planning scene, a palletizing action/node, and a recorded RViz demo.
+- Done: bringup, 2F-85 integration, planning scene, industrial palletizing cell,
+  pedestal-mounted layout.
+- Next: **Phase 3, perception-driven bin picking** (an RGB-D camera and pose
+  estimation feed real grasp poses instead of known bin cells).
+- Advanced: MoveIt Task Constructor for task-level grasp planning.
