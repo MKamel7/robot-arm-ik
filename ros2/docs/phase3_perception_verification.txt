@@ -34,3 +34,11 @@ reported, not hard-coded cells:
     perceived 4 parts from the camera
     part_0..3 picked from detected bin poses -> pallet
     parts placed : 4/4    cycle time ~9.8 s/part    RESULT: PASS
+
+--- scrambled-pose demonstration (perception is real, not hard-coded) ---
+Parts were moved to arbitrary positions in Gazebo (gz set_pose), the detector
+tracked them to ~1 mm, and the palletizer picked the perceived poses:
+    perceived parts at (0.44,-0.40), (0.49,-0.24), (0.40,-0.27)
+    parts placed : 3/3 (3 of 4 detected; the 4th sat at the camera edge)
+    0 re-plans, ~9.7 s/part, RESULT: PASS
+The system palletizes what it sees and does not fake undetected parts.
