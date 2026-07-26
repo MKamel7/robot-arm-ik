@@ -14,6 +14,11 @@
   <xacro:include filename="$(find ur_moveit_config)/srdf/ur_macro.srdf.xacro"/>
   <xacro:ur_srdf/>
 
+  <!-- The arm base rests on the pedestal stand -->
+  <disable_collisions link1="pedestal" link2="base_link" reason="Adjacent"/>
+  <disable_collisions link1="pedestal" link2="base_link_inertia" reason="Adjacent"/>
+  <disable_collisions link1="pedestal" link2="shoulder_link" reason="Never"/>
+
   <!-- Gripper group: the single actuated knuckle joint drives the 2F-85 -->
   <group name="gripper">
     <joint name="robotiq_85_left_knuckle_joint"/>

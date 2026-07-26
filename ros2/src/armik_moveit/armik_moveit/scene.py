@@ -20,10 +20,15 @@ from std_msgs.msg import ColorRGBA
 
 BASE_FRAME = "base_link"
 
-# --- cell geometry: id -> (size_xyz, center_xyz, rgb) in BASE_FRAME (metres) ---
-# Table top sits at z = 0 (the arm is mounted at its near edge); everything else
-# rests on the table. x starts well in front of the base so the table never
-# collides with the arm's own base links.
+# The arm is mounted on a pedestal (see ur5e_robotiq.urdf.xacro); base_link is
+# MOUNT_H above the floor. The cell geometry below is written floor-referenced
+# (table top ~ 0) and dropped by MOUNT_H into base_link frame, so the arm works
+# downward over the cell. MOUNT_H must match the pedestal height in the xacro.
+MOUNT_H = 0.40
+
+# --- cell geometry: id -> (size_xyz, center_xyz, rgb), floor-referenced (metres) ---
+# Table top sits at floor z = 0; everything else rests on the table. x starts
+# well in front of the base so the table never collides with the arm's base.
 TABLE = ((0.66, 1.20, 0.04), (0.47, 0.0, -0.02), (0.55, 0.55, 0.58))
 SUPPLY_BIN = ((0.26, 0.24, 0.08), (0.47, -0.32, 0.04), (0.30, 0.42, 0.60))
 PALLET = ((0.34, 0.34, 0.06), (0.47, 0.36, 0.03), (0.62, 0.46, 0.26))
@@ -44,8 +49,8 @@ STRUCTURES = {
 # is not flagged as a collision once it is attached to the gripper.
 PART_SIZE = 0.04
 CLEARANCE = 0.006
-BIN_TOP = SUPPLY_BIN[1][2] + SUPPLY_BIN[0][2] / 2      # 0.08
-PART_Z = BIN_TOP + PART_SIZE / 2 + CLEARANCE
+BIN_TOP = SUPPLY_BIN[1][2] + SUPPLY_BIN[0][2] / 2      # 0.08 (floor-referenced)
+PART_Z = BIN_TOP + PART_SIZE / 2 + CLEARANCE - MOUNT_H  # base_link frame
 PART_COLORS = {
     "part_0": (0.85, 0.15, 0.15), "part_1": (0.15, 0.70, 0.20),
     "part_2": (0.15, 0.35, 0.85), "part_3": (0.90, 0.75, 0.10),
@@ -59,10 +64,10 @@ def _grid(cx, cy, nx, ny, sx, sy):
 
 # Pick cells on the bin, pallet slots (filled back-to-front), transit waypoint.
 PICK_CELLS = [(x, y, PART_Z) for x, y in _grid(0.47, -0.32, 2, 2, 0.12, 0.12)]
-PALLET_TOP = PALLET[1][2] + PALLET[0][2] / 2            # 0.06
+PALLET_TOP = PALLET[1][2] + PALLET[0][2] / 2 - MOUNT_H  # base_link frame
 PALLET_XY = sorted(_grid(0.47, 0.36, 2, 2, 0.15, 0.15), key=lambda p: (-p[1], p[0]))
-# High central waypoint clear of the separator wall (top 0.34 m).
-TRANSIT = (0.30, 0.0, 0.52)
+# High central waypoint clear of the separator wall (floor z 0.52).
+TRANSIT = (0.30, 0.0, 0.52 - MOUNT_H)
 REACH_MAX = 0.82
 
 
@@ -92,7 +97,8 @@ def build_scene(clear):
     scene = PlanningScene()
     scene.is_diff = True
     for object_id, (size, center, rgb) in STRUCTURES.items():
-        obj = _box(object_id, size, center)
+        cx, cy, cz = center
+        obj = _box(object_id, size, (cx, cy, cz - MOUNT_H))  # drop into base_link frame
         obj.operation = CollisionObject.REMOVE if clear else CollisionObject.ADD
         scene.world.collision_objects.append(obj)
         if not clear:

@@ -16,9 +16,32 @@
   <xacro:arg name="ur_type" default="ur5e"/>
   <xacro:arg name="tf_prefix" default=""/>
 
+  <!-- The arm is mounted on a pedestal so it works downward over the cell from
+       above (the industrial workcell layout). base_link sits mount_h above the
+       floor; the cell geometry in scene.py is offset down by the same amount. -->
+  <xacro:property name="mount_h" value="0.40"/>
+
   <link name="world"/>
 
-  <!-- UR arm description -->
+  <!-- Pedestal stand from the floor up to the arm base -->
+  <link name="pedestal">
+    <visual>
+      <origin xyz="0 0 ${mount_h/2}" rpy="0 0 0"/>
+      <geometry><box size="0.20 0.20 ${mount_h}"/></geometry>
+      <material name="pedestal_gray"><color rgba="0.28 0.28 0.30 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${mount_h/2 - 0.01}" rpy="0 0 0"/>
+      <geometry><box size="0.20 0.20 ${mount_h - 0.02}"/></geometry>
+    </collision>
+  </link>
+  <joint name="world_to_pedestal" type="fixed">
+    <parent link="world"/>
+    <child link="pedestal"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- UR arm description, base raised onto the pedestal -->
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
   <xacro:ur_robot
     name="ur5e"
@@ -29,7 +52,7 @@
     physical_parameters_file="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"
     visual_parameters_file="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"
     safety_limits="true">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <origin xyz="0 0 ${mount_h}" rpy="0 0 0"/>
   </xacro:ur_robot>
 
   <!-- Arm ros2_control: mock hardware (mirrors command to state) -->
