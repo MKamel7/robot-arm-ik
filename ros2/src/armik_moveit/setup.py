@@ -14,6 +14,7 @@ setup(
         ("share/" + package_name + "/launch", glob("launch/*.launch.py")),
         ("share/" + package_name + "/description", glob("description/*.xacro")),
         ("share/" + package_name + "/config", glob("config/*")),
+        ("share/" + package_name + "/worlds", glob("worlds/*.sdf")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
@@ -27,6 +28,7 @@ setup(
             "populate_scene = armik_moveit.scene:main",
             "scene_routing_check = armik_moveit.scene_routing_check:main",
             "palletize = armik_moveit.palletizing:main",
+            "detector = armik_moveit.detector:main",
         ],
     },
 )

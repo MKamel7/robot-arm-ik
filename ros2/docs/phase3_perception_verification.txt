@@ -1,0 +1,24 @@
+Phase 3 perception: RGB-D detection of bin parts (Gazebo, headless).
+Recorded 2026-07-26. ROS 2 Jazzy, gz Sim 8.
+
+    ros2 launch armik_moveit perception.launch.py
+
+A downward RGB-D camera over the supply bin renders four coloured parts. The
+detector (armik_moveit/detector.py) thresholds each colour in RGB, takes the
+largest blob's centroid, samples the depth there, deprojects the pixel to the
+camera optical frame, and transforms it to the world frame with the known camera
+pose. Classical perception, no learned model.
+
+Detections vs ground truth (world frame):
+    red   : (0.411, -0.379, 0.120)  gt (0.41, -0.38)  err  2 mm
+    yellow: (0.531, -0.260, 0.120)  gt (0.53, -0.26)  err  1 mm
+    blue  : (0.422, -0.271, 0.120)  gt (0.41, -0.26)  err 16 mm
+    green : (0.516, -0.366, 0.120)  gt (0.53, -0.38)  err 20 mm
+
+All four parts recovered at 1-20 mm (part cube is 40 mm), well within grasp
+tolerance. z = 0.12 is the part top surface (the depth camera sees the top).
+Poses are published on /detected_parts (geometry_msgs/PoseArray).
+
+Next: feed detected poses to the palletizer (replace the hard-coded bin cells),
+transform world -> base_link (subtract the pedestal height), randomise part
+poses, and handle no-valid-grasp.
