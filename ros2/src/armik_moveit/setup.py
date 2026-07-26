@@ -24,6 +24,8 @@ setup(
     entry_points={
         "console_scripts": [
             "plan_execute_smoke = armik_moveit.plan_execute_smoke:main",
+            "populate_scene = armik_moveit.scene:main",
+            "scene_routing_check = armik_moveit.scene_routing_check:main",
         ],
     },
 )

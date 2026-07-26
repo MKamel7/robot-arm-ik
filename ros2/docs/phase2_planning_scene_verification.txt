@@ -1,0 +1,24 @@
+Phase 2 planning scene: collision-aware routing verified (mock hardware, headless).
+Recorded 2026-07-26. ROS 2 Jazzy, Ubuntu 24.04.
+
+Setup:
+    ros2 launch armik_moveit ur5e_gripper_moveit.launch.py launch_rviz:=false
+    ros2 run armik_moveit populate_scene       # adds supply_bin, pallet, fixture
+    ros2 run armik_moveit scene_routing_check
+
+The cell (base_link frame): a supply bin at -y, a pallet at +y, and a machine
+fixture (0.60 m tall) standing between them, so a straight bin-to-pallet path at
+working height clips the fixture and the planner must route around.
+
+Result:
+    scene objects: ['fixture', 'pallet', 'supply_bin']
+    bin/pallet/fixture present: True
+    reset to home (up):            result 1 (SUCCESS)
+    move to above bin:             result 1 (SUCCESS)
+    transfer above bin -> above pallet (fixture between): result 1 (SUCCESS)
+        => OMPL routed a collision-free path around the fixture
+    control, goal inside the fixture: result 99999 (FAILURE, correctly rejected)
+    RESULT: PASS
+
+This is the ROS/MoveIt equivalent of the collision-aware routing in the Phase 1
+MuJoCo palletizing cell.
