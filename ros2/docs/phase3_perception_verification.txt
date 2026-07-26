@@ -22,3 +22,15 @@ Poses are published on /detected_parts (geometry_msgs/PoseArray).
 Next: feed detected poses to the palletizer (replace the hard-coded bin cells),
 transform world -> base_link (subtract the pedestal height), randomise part
 poses, and handle no-valid-grasp.
+
+--- perception-driven palletizing (closed loop) ---
+Run perception.launch.py + ur5e_gripper_moveit.launch.py, then:
+    PICK_SOURCE=perception ros2 run armik_moveit palletize
+
+The palletizer subscribes to /detected_parts, transforms each world pose into
+base_link (subtract the pedestal height, part centre + clearance), spawns a
+collision object there, and picks it. The arm palletizes the poses the CAMERA
+reported, not hard-coded cells:
+    perceived 4 parts from the camera
+    part_0..3 picked from detected bin poses -> pallet
+    parts placed : 4/4    cycle time ~9.8 s/part    RESULT: PASS

@@ -21,12 +21,13 @@ production cell is (see docs/ENGINEERING_PLAN.md):
 Geometry comes from scene.py (table/bin/pallet/separator).
 """
 import math
+import os
 import sys
 import time
 
 import rclpy
 from control_msgs.action import GripperCommand
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import (
     AttachedCollisionObject,
@@ -49,8 +50,8 @@ from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import ColorRGBA
 
 from armik_moveit.scene import (
-    CLEARANCE, PALLET_TOP, PALLET_XY, PART_COLORS, PART_SIZE, PART_Z, PICK_CELLS,
-    REACH_MAX, STRUCTURES, TRANSIT, build_scene,
+    CLEARANCE, MOUNT_H, PALLET_TOP, PALLET_XY, PART_COLORS, PART_SIZE, PART_Z,
+    PICK_CELLS, REACH_MAX, STRUCTURES, TRANSIT, build_scene,
 )
 
 BASE = "base_link"
@@ -320,6 +321,28 @@ class Palletizer(Node):
     def go_home(self):
         return self.move_config(HOME, label="home")
 
+    def perceived_picks(self, timeout=20.0):
+        """Wait for /detected_parts and return pick poses in base_link frame.
+
+        The detector publishes each part's top-surface pose in the world frame.
+        base_link sits MOUNT_H above the floor (the pedestal), so world -> base
+        is a z shift by -MOUNT_H; the part centre is half a part below the top.
+        """
+        got = {}
+        sub = self.create_subscription(
+            PoseArray, "/detected_parts", lambda m: got.setdefault("arr", m), 10)
+        end = time.time() + timeout
+        while rclpy.ok() and "arr" not in got and time.time() < end:
+            rclpy.spin_once(self, timeout_sec=0.2)
+        self.destroy_subscription(sub)
+        picks = []
+        for p in got.get("arr", PoseArray()).poses:
+            # part centre = detected top - half a part, + clearance (so a part
+            # resting on the bin is not flagged in collision), then into base frame
+            z_center_base = (p.position.z - PART_SIZE / 2 + CLEARANCE) - MOUNT_H
+            picks.append((p.position.x, p.position.y, z_center_base))
+        return picks
+
     # --- one pick and place ---
     def pick_place(self, part_id, pick, place, transit_cfg):
         px, py, pz = pick
@@ -368,13 +391,23 @@ def main():
     node = Palletizer()
     try:
         node._apply(build_scene(clear=False))
+        # Pick source: hard-coded bin cells, or poses perceived by the camera.
+        if os.environ.get("PICK_SOURCE") == "perception":
+            print("waiting for /detected_parts (run perception.launch.py) ...")
+            cells = node.perceived_picks()
+            if not cells:
+                print("no perceived parts; aborting")
+                sys.exit(1)
+            print(f"perceived {len(cells)} parts from the camera")
+        else:
+            cells = PICK_CELLS
         parts = []
-        for i, (x, y, z) in enumerate(PICK_CELLS):
+        for i, (x, y, z) in enumerate(cells):
             pid = f"part_{i}"
             node.add_part(pid, x, y, z)
             parts.append((pid, (x, y, z)))
         time.sleep(0.5)
-        print(f"cell: {', '.join(STRUCTURES)} | {len(parts)} parts in the bin")
+        print(f"cell: {', '.join(STRUCTURES)} | {len(parts)} parts")
 
         if not node.go_home():
             print("could not reach home; aborting")
