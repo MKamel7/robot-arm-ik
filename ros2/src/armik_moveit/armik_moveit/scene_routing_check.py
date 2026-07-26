@@ -2,12 +2,12 @@
 
 Against a live ur5e_gripper_moveit bringup with the cell populated
 (populate_scene), this:
-  1. confirms the bin/pallet/fixture collision objects are in move_group's scene,
+  1. confirms the bin/pallet/separator collision objects are in move_group's scene,
   2. homes the arm, moves to a pose above the supply bin,
-  3. plans+executes a transfer to above the pallet, with the fixture in between
+  3. plans+executes a transfer to above the pallet, with the separator in between
      (success proves OMPL routed around it, since MoveIt only returns
      collision-free plans),
-  4. as a control, confirms a goal inside the fixture is rejected.
+  4. as a control, confirms a goal inside the separator is rejected.
 
 This is the ROS equivalent of the collision-aware routing in the Phase 1 MuJoCo
 palletizing cell.
@@ -129,8 +129,8 @@ def main():
     try:
         ids = node.scene_objects()
         print("scene objects:", ids)
-        have = all(k in ids for k in ("supply_bin", "pallet", "fixture"))
-        print("bin/pallet/fixture present:", have)
+        have = all(k in ids for k in ("supply_bin", "pallet", "separator"))
+        print("bin/pallet/separator present:", have)
 
         print("reset to home (up) ...")
         home = node.go_home()
@@ -138,17 +138,17 @@ def main():
         time.sleep(1.0)
 
         print("move to above bin ...")
-        above_bin = node.go_to_point(_point(0.45, -0.30, 0.35), execute=True)
+        above_bin = node.go_to_point(_point(0.47, -0.30, 0.35), execute=True)
         print("  above-bin result:", above_bin)
         time.sleep(1.0)
 
-        print("plan+execute transfer to above pallet (fixture in between) ...")
-        transfer = node.go_to_point(_point(0.45, 0.32, 0.35), execute=True)
-        print("  transfer result:", transfer, "(SUCCESS => routed around fixture)")
+        print("plan+execute transfer to above pallet (separator in between) ...")
+        transfer = node.go_to_point(_point(0.47, 0.30, 0.35), execute=True)
+        print("  transfer result:", transfer, "(SUCCESS => routed around separator)")
 
-        print("control: goal inside the fixture should be rejected ...")
-        in_fixture = node.go_to_point(_point(0.45, 0.0, 0.30), execute=False)
-        print("  in-fixture goal result:", in_fixture, "(expect not SUCCESS)")
+        print("control: goal inside the separator should be rejected ...")
+        in_fixture = node.go_to_point(_point(0.45, 0.0, 0.07), execute=False)
+        print("  in-separator goal result:", in_fixture, "(expect not SUCCESS)")
 
         ok = (have and home == SUCCESS and above_bin == SUCCESS
               and transfer == SUCCESS and in_fixture != SUCCESS)

@@ -1,25 +1,32 @@
 """Palletizing cell on the ROS 2 / MoveIt 2 stack (mock hardware).
 
-The ROS version of the Phase 1 MuJoCo palletizing_cell: the UR5e transfers parts
-from a supply bin to a pallet, one slot at a time, routing around the machine
-fixture (MoveIt/OMPL), gripping with the Robotiq 2F-85, and stacking in layers.
-A reachability pre-check rejects any slot outside the arm's workspace instead of
-faking it. Parts move as attached collision objects (mock hardware has no
-physics grasp, so the grip is represented in the planning scene, standard for a
-MoveIt pick-and-place). Production-style metrics are printed at the end.
+Industrial-style pick-and-place for the UR5e + Robotiq 2F-85, built the way a
+production cell is (see docs/ENGINEERING_PLAN.md):
+
+  - Deterministic motion with the Pilz Industrial Motion Planner: PTP
+    (point-to-point) for transfers, LIN (straight-line Cartesian) for the
+    approach and retreat. No random sampling, so motion is smooth and repeatable.
+  - A fixed top-down grasp: every station's joint configuration comes from one
+    consistent /compute_ik seed, so the tool always arrives pointing straight
+    down with the same posture (no wonky angles, no wrist flips, no behind-the-
+    base swings).
+  - The part is attached to the gripper by id at its real pose, so it rigidly
+    follows the tool (no teleporting), mock hardware has no physics grasp.
+  - A reachability pre-check rejects out-of-workspace slots; the pallet fills
+    back-to-front; production metrics are printed at the end.
 
     ros2 launch armik_moveit ur5e_gripper_moveit.launch.py    # (RViz optional)
     ros2 run armik_moveit palletize
 
-Geometry mirrors scene.py's cell (bin/pallet/fixture).
+Geometry comes from scene.py (table/bin/pallet/separator).
 """
 import math
 import sys
 import time
 
 import rclpy
-from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
+from geometry_msgs.msg import Pose, PoseStamped
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import (
     AttachedCollisionObject,
@@ -27,23 +34,48 @@ from moveit_msgs.msg import (
     Constraints,
     JointConstraint,
     MotionPlanRequest,
-    PlanningScene,
+    ObjectColor,
+    OrientationConstraint,
     PlanningOptions,
+    PlanningScene,
     PositionConstraint,
+    RobotState,
 )
-from moveit_msgs.srv import ApplyPlanningScene
+from moveit_msgs.srv import ApplyPlanningScene, GetPositionIK
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import ColorRGBA
 
-from armik_moveit.scene import CELL_OBJECTS, build_scene
+from armik_moveit.scene import (
+    CLEARANCE, PALLET_TOP, PALLET_XY, PART_COLORS, PART_SIZE, PART_Z, PICK_CELLS,
+    REACH_MAX, STRUCTURES, TRANSIT, build_scene,
+)
 
 BASE = "base_link"
 EEF = "tool0"
 GROUP = "ur_manipulator"
 SUCCESS = 1
+PILZ = "pilz_industrial_motion_planner"
 
-# Gripper: link parts hang from, and the links they may touch when attached.
+ARM_JOINTS = ["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
+              "wrist_1_joint", "wrist_2_joint", "wrist_3_joint"]
+# Consistent IK seed (elbow-up, facing front) so every station resolves to the
+# same posture branch.
+IK_SEED = [0.0, -1.2, 1.4, -1.6, -1.57, 0.0]
+
+
+def q_down(yaw):
+    """Quaternion (x,y,z,w) for tool-z straight down at the given yaw = Rz(yaw)Rx(pi)."""
+    sz, cz = math.sin(yaw / 2), math.cos(yaw / 2)
+    # Rz(yaw)=(0,0,sz,cz) (Hamilton, w last-ish) composed with Rx(pi)=(1,0,0,0)
+    return (cz, sz, 0.0, 0.0)
+
+
+# Yaw chosen so wrist_3 stays small at both bin and pallet (see ik_probe).
+GRASP_QUAT = q_down(-math.pi / 2)
+
 GRIPPER_LINKS = [
     "robotiq_85_base_link",
     "robotiq_85_left_knuckle_link", "robotiq_85_right_knuckle_link",
@@ -55,52 +87,21 @@ GRIPPER_ACTION = "/robotiq_gripper_controller/gripper_cmd"
 GRIP_OPEN = 0.0
 GRIP_CLOSED = 0.6
 
-PART = 0.04                 # part cube edge (m)
-GRIPPER_LEN = 0.16          # tool0 -> grasp point along the tool approach axis
-APPROACH_DZ = 0.16          # standoff above a pick/place before descending
-REACH_MAX = 0.82            # UR5e workspace radius for a downward grasp
+GRIPPER_LEN = 0.16          # tool0 -> grasp point along the (downward) tool axis
+APPROACH_DZ = 0.15          # standoff above a pick/place before the LIN descent
 
-HOME = {
-    "shoulder_pan_joint": 0.0, "shoulder_lift_joint": -1.5707, "elbow_joint": 0.0,
-    "wrist_1_joint": -1.5707, "wrist_2_joint": 0.0, "wrist_3_joint": 0.0,
-}
-
-# High, central waypoint above the fixture (top 0.60 m). Every transfer routes
-# through here, so each leg is an easy near-vertical move instead of one hard
-# plan around the fixture. This is the fixed-waypoint transit from the Phase 1
-# cell; the standalone collision-aware routing is proven by scene_routing_check.
-TRANSIT = (0.32, 0.0, 0.62)
-
-
-def _grid(cx, cy, nx, ny, sx, sy):
-    return [(cx + (i - (nx - 1) / 2) * sx, cy + (j - (ny - 1) / 2) * sy)
-            for j in range(ny) for i in range(nx)]
-
-
-# Parts sit on the supply bin top (bin: centre z 0.05, height 0.10 -> top 0.10).
-BIN_TOP = 0.10
-PART_Z = BIN_TOP + PART / 2
-PICK_CELLS = [(x, y, PART_Z) for x, y in _grid(0.45, -0.30, 2, 2, 0.12, 0.12)]
-
-# Pallet slots: a 2x2 footprint, up to 2 layers (pallet top z 0.08). Filled
-# back-to-front (far row first) so no placement ever has to reach over a part
-# already on the pallet, the standard palletizing order.
-PALLET_TOP = 0.08
-PALLET_XY = sorted(_grid(0.45, 0.32, 2, 2, 0.14, 0.14), key=lambda p: (-p[1], p[0]))
-LAYERS = 1  # raise to 2 to stack a second layer (needs >=8 parts)
+HOME = [0.0, -1.5707, 0.0, -1.5707, 0.0, 0.0]  # SRDF "up"
+LAYERS = 1
 
 
 def slot_pose(index):
-    """Map a place index to (x, y, z), filling a layer before stacking up."""
     per_layer = len(PALLET_XY)
     layer, within = divmod(index, per_layer)
     x, y = PALLET_XY[within]
-    z = PALLET_TOP + PART / 2 + layer * PART
-    return (x, y, z)
+    return (x, y, PALLET_TOP + PART_SIZE / 2 + CLEARANCE + layer * PART_SIZE)
 
 
 def reachable(x, y, z):
-    # Grasp point is GRIPPER_LEN above the part; check the tool0 target.
     return math.sqrt(x * x + y * y + (z + GRIPPER_LEN) ** 2) <= REACH_MAX
 
 
@@ -110,49 +111,62 @@ class Palletizer(Node):
         self.mg = ActionClient(self, MoveGroup, "/move_action")
         self.grip = ActionClient(self, GripperCommand, GRIPPER_ACTION)
         self.scene = self.create_client(ApplyPlanningScene, "/apply_planning_scene")
+        self.ik = self.create_client(GetPositionIK, "/compute_ik")
         self.replans = 0
 
-    # --- planning scene helpers ---
+    # --- planning scene ---
     def _apply(self, scene_msg):
         self.scene.wait_for_service(timeout_sec=10.0)
         fut = self.scene.call_async(ApplyPlanningScene.Request(scene=scene_msg))
         rclpy.spin_until_future_complete(self, fut)
         return fut.result() is not None and fut.result().success
 
+    def _part_color(self, part_id):
+        rgb = PART_COLORS.get(part_id)
+        if not rgb:
+            return None
+        oc = ObjectColor(id=part_id)
+        oc.color = ColorRGBA(r=float(rgb[0]), g=float(rgb[1]), b=float(rgb[2]), a=1.0)
+        return oc
+
     def add_part(self, part_id, x, y, z):
         obj = CollisionObject()
         obj.header.frame_id = BASE
         obj.id = part_id
-        prim = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[PART, PART, PART])
+        obj.primitives.append(
+            SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[PART_SIZE] * 3))
         pose = Pose()
         pose.position.x, pose.position.y, pose.position.z = x, y, z
         pose.orientation.w = 1.0
-        obj.primitives.append(prim)
         obj.primitive_poses.append(pose)
         obj.operation = CollisionObject.ADD
         scene = PlanningScene(is_diff=True)
         scene.world.collision_objects.append(obj)
+        color = self._part_color(part_id)
+        if color:
+            scene.object_colors.append(color)
         return self._apply(scene)
 
-    def remove_part(self, part_id):
+    def _remove_world(self, part_id):
         obj = CollisionObject(id=part_id, operation=CollisionObject.REMOVE)
         obj.header.frame_id = BASE
         scene = PlanningScene(is_diff=True)
         scene.world.collision_objects.append(obj)
-        return self._apply(scene)
+        self._apply(scene)
 
     def attach_part(self, part_id):
-        """Attach the part to the tool, GRIPPER_LEN out along the approach axis."""
-        self.remove_part(part_id)
+        """Attach the part to the tool at the grasp offset (tool-z points down, so
+        +GRIPPER_LEN along tool-z lands it exactly where it sat, no teleport)."""
+        self._remove_world(part_id)
         aco = AttachedCollisionObject()
         aco.link_name = EEF
         aco.object.header.frame_id = EEF
         aco.object.id = part_id
-        prim = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[PART, PART, PART])
+        aco.object.primitives.append(
+            SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[PART_SIZE] * 3))
         pose = Pose()
         pose.position.z = GRIPPER_LEN
         pose.orientation.w = 1.0
-        aco.object.primitives.append(prim)
         aco.object.primitive_poses.append(pose)
         aco.object.operation = CollisionObject.ADD
         aco.touch_links = GRIPPER_LINKS
@@ -161,7 +175,8 @@ class Palletizer(Node):
         scene.robot_state.attached_collision_objects.append(aco)
         return self._apply(scene)
 
-    def detach_place(self, part_id, x, y, z):
+    def detach_part(self, part_id):
+        """Detach by id: the part returns to the world at its current pose."""
         aco = AttachedCollisionObject()
         aco.link_name = EEF
         aco.object.id = part_id
@@ -169,15 +184,43 @@ class Palletizer(Node):
         scene = PlanningScene(is_diff=True)
         scene.robot_state.is_diff = True
         scene.robot_state.attached_collision_objects.append(aco)
-        self._apply(scene)
-        return self.add_part(part_id, x, y, z)
+        color = self._part_color(part_id)
+        if color:
+            scene.object_colors.append(color)  # re-assert colour after re-add
+        return self._apply(scene)
 
-    # --- motion helpers ---
-    def _send(self, req, execute):
+    # --- kinematics + motion ---
+    def ik_topdown(self, x, y, z):
+        """Top-down /compute_ik at (x,y,z) from the consistent seed. None if no IK."""
+        req = GetPositionIK.Request()
+        r = req.ik_request
+        r.group_name = GROUP
+        r.ik_link_name = EEF
+        r.avoid_collisions = True
+        r.timeout.sec = 2
+        r.robot_state = RobotState()
+        r.robot_state.joint_state = JointState(name=ARM_JOINTS, position=IK_SEED)
+        ps = PoseStamped()
+        ps.header.frame_id = BASE
+        ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = x, y, z
+        (ps.pose.orientation.x, ps.pose.orientation.y,
+         ps.pose.orientation.z, ps.pose.orientation.w) = GRASP_QUAT
+        r.pose_stamped = ps
+        self.ik.wait_for_service(timeout_sec=10.0)
+        fut = self.ik.call_async(req)
+        rclpy.spin_until_future_complete(self, fut)
+        res = fut.result()
+        if res is None or res.error_code.val != SUCCESS:
+            return None
+        sol = dict(zip(res.solution.joint_state.name,
+                       res.solution.joint_state.position))
+        if not all(j in sol for j in ARM_JOINTS):
+            return None
+        return [sol[j] for j in ARM_JOINTS]
+
+    def _send(self, req):
         goal = MoveGroup.Goal(request=req)
-        opts = PlanningOptions()
-        opts.plan_only = not execute
-        goal.planning_options = opts
+        goal.planning_options = PlanningOptions(plan_only=False)
         self.mg.wait_for_server(timeout_sec=30.0)
         f = self.mg.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, f)
@@ -188,47 +231,79 @@ class Palletizer(Node):
         rclpy.spin_until_future_complete(self, rf)
         return rf.result().result.error_code.val
 
-    def _req(self, attempts, seconds):
+    def _pilz(self, planner, vel):
         req = MotionPlanRequest()
         req.group_name = GROUP
-        req.num_planning_attempts = attempts
-        req.allowed_planning_time = seconds
-        req.max_velocity_scaling_factor = 0.5
-        req.max_acceleration_scaling_factor = 0.5
+        req.pipeline_id = PILZ
+        req.planner_id = planner
+        req.num_planning_attempts = 1
+        req.allowed_planning_time = 5.0
+        req.max_velocity_scaling_factor = vel
+        req.max_acceleration_scaling_factor = vel
         return req
 
-    def go_home(self):
-        req = self._req(10, 15.0)
-        c = Constraints()
-        for j, v in HOME.items():
-            c.joint_constraints.append(JointConstraint(
-                joint_name=j, position=v, tolerance_above=0.01,
-                tolerance_below=0.01, weight=1.0))
-        req.goal_constraints.append(c)
-        return self._send(req, execute=True) == SUCCESS
+    def move_config(self, config, vel=0.6, label=""):
+        """Move to a joint configuration with OMPL (obstacle-avoiding).
 
-    def go_to(self, x, y, z, seconds=18.0, label=""):
-        """Move tool0 to a point (position-only goal). Retries on failure."""
-        for attempt in range(3):
-            req = self._req(20, seconds)
-            pc = PositionConstraint()
-            pc.header.frame_id = BASE
-            pc.link_name = EEF
-            pc.constraint_region.primitives.append(
-                SolidPrimitive(type=SolidPrimitive.SPHERE, dimensions=[0.05]))
-            region = Pose()
-            region.position.x, region.position.y, region.position.z = x, y, z
-            region.orientation.w = 1.0
-            pc.constraint_region.primitive_poses.append(region)
-            pc.weight = 1.0
+        Used for the transfers between stations: the goal is the clean top-down
+        config, and OMPL routes around the separator (Pilz PTP would sweep a
+        straight joint-space line through it).
+        """
+        if config is None:
+            if label:
+                print(f"      no IK for '{label}'")
+            return False
+        for _ in range(2):
+            req = MotionPlanRequest()
+            req.group_name = GROUP  # default OMPL pipeline
+            req.num_planning_attempts = 12
+            req.allowed_planning_time = 8.0
+            req.max_velocity_scaling_factor = vel
+            req.max_acceleration_scaling_factor = vel
             c = Constraints()
-            c.position_constraints.append(pc)
+            for j, v in zip(ARM_JOINTS, config):
+                c.joint_constraints.append(JointConstraint(
+                    joint_name=j, position=v, tolerance_above=0.01,
+                    tolerance_below=0.01, weight=1.0))
             req.goal_constraints.append(c)
-            if self._send(req, execute=True) == SUCCESS:
+            if self._send(req) == SUCCESS:
                 return True
             self.replans += 1
         if label:
-            print(f"      step '{label}' failed at ({x:.2f},{y:.2f},{z:.2f})")
+            print(f"      move '{label}' failed")
+        return False
+
+    def lin(self, x, y, z, vel=0.25, label=""):
+        """Pilz LIN (straight line) to a top-down pose."""
+        req = self._pilz("LIN", vel)
+        c = Constraints()
+        pc = PositionConstraint()
+        pc.header.frame_id = BASE
+        pc.link_name = EEF
+        pc.constraint_region.primitives.append(
+            SolidPrimitive(type=SolidPrimitive.SPHERE, dimensions=[0.005]))
+        rp = Pose()
+        rp.position.x, rp.position.y, rp.position.z = x, y, z
+        rp.orientation.w = 1.0
+        pc.constraint_region.primitive_poses.append(rp)
+        pc.weight = 1.0
+        c.position_constraints.append(pc)
+        oc = OrientationConstraint()
+        oc.header.frame_id = BASE
+        oc.link_name = EEF
+        (oc.orientation.x, oc.orientation.y,
+         oc.orientation.z, oc.orientation.w) = GRASP_QUAT
+        oc.absolute_x_axis_tolerance = 0.05
+        oc.absolute_y_axis_tolerance = 0.05
+        oc.absolute_z_axis_tolerance = 0.05
+        oc.weight = 1.0
+        c.orientation_constraints.append(oc)
+        req.goal_constraints.append(c)
+        if self._send(req) == SUCCESS:
+            return True
+        self.replans += 1
+        if label:
+            print(f"      LIN '{label}' failed at ({x:.2f},{y:.2f},{z:.2f})")
         return False
 
     def gripper(self, position):
@@ -238,52 +313,58 @@ class Palletizer(Node):
         goal.command.max_effort = 50.0
         f = self.grip.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, f)
-        h = f.result()
-        rf = h.get_result_async()
+        rf = f.result().get_result_async()
         rclpy.spin_until_future_complete(self, rf)
         return True
 
-    # --- one pick-and-place ---
+    def go_home(self):
+        return self.move_config(HOME, label="home")
+
+    # --- one pick and place ---
     def pick_place(self, part_id, pick, place):
         px, py, pz = pick
         qx, qy, qz = place
-        pick_top = pz + GRIPPER_LEN
-        place_top = qz + GRIPPER_LEN
+        grasp_z = pz + GRIPPER_LEN
+        appr_z = grasp_z + APPROACH_DZ
+        place_z = qz + GRIPPER_LEN
+        place_appr = place_z + APPROACH_DZ
+
         self.gripper(GRIP_OPEN)
-        # pick: approach above bin, descend, grip, attach, ascend
-        if not self.go_to(px, py, pick_top + APPROACH_DZ, label="approach-bin"):
+        # PICK: PTP above bin (top-down), LIN down, grip, attach, LIN up
+        if not self.move_config(self.ik_topdown(px, py, appr_z), label="above-bin"):
             return False
-        if not self.go_to(px, py, pick_top, seconds=10.0, label="descend-pick"):
+        if not self.lin(px, py, grasp_z, label="descend-pick"):
             return False
         self.gripper(GRIP_CLOSED)
         self.attach_part(part_id)
-        if not self.go_to(px, py, pick_top + APPROACH_DZ, label="lift"):
-            return False
-        # transfer via the high transit waypoint above the fixture
-        if not self.go_to(*TRANSIT, label="transit"):
-            return False
-        # place: approach above slot, descend, release, detach, ascend
-        if not self.go_to(qx, qy, place_top + APPROACH_DZ, label="approach-pallet"):
-            return False
-        if not self.go_to(qx, qy, place_top, seconds=10.0, label="descend-place"):
-            return False
-        # Part is down and released here: the placement counts from now on.
-        self.detach_place(part_id, qx, qy, qz)
-        self.gripper(GRIP_OPEN)
-        # Clearing the pallet is best effort: try a straight retreat, else go
-        # straight to the transit waypoint. Either way the part stays placed.
-        if not self.go_to(qx, qy, place_top + APPROACH_DZ, label="retreat"):
-            self.go_to(*TRANSIT, label="retreat-transit")
-        else:
-            self.go_to(*TRANSIT, label="transit-back")
-        return True
+        attached = True
+        try:
+            if not self.lin(px, py, appr_z, label="lift"):
+                return False
+            # TRANSFER: OMPL routes around the separator to the slot approach
+            if not self.move_config(self.ik_topdown(qx, qy, place_appr), label="above-pallet"):
+                return False
+            # PLACE: LIN down, release, detach at the slot, LIN up
+            if not self.lin(qx, qy, place_z, label="descend-place"):
+                return False
+            self.gripper(GRIP_OPEN)
+            self.detach_part(part_id)
+            attached = False
+            self.lin(qx, qy, place_appr, label="retreat")
+            return True
+        finally:
+            if attached:
+                # failed mid-transfer: drop the held part and clear it so the
+                # next part starts from a clean gripper (no cascade)
+                self.detach_part(part_id)
+                self._remove_world(part_id)
+                self.gripper(GRIP_OPEN)
 
 
 def main():
     rclpy.init()
     node = Palletizer()
     try:
-        # Build the cell (bin/pallet/fixture) and spawn the parts in the bin.
         node._apply(build_scene(clear=False))
         parts = []
         for i, (x, y, z) in enumerate(PICK_CELLS):
@@ -291,12 +372,11 @@ def main():
             node.add_part(pid, x, y, z)
             parts.append((pid, (x, y, z)))
         time.sleep(0.5)
-        print(f"cell: {', '.join(CELL_OBJECTS)} | {len(parts)} parts in the bin")
+        print(f"cell: {', '.join(STRUCTURES)} | {len(parts)} parts in the bin")
 
         if not node.go_home():
             print("could not reach home; aborting")
             sys.exit(1)
-        node.go_to(*TRANSIT, label="initial-transit")  # tool-down, high, ready
 
         placed = rejected = 0
         t0 = time.time()
@@ -309,7 +389,7 @@ def main():
                 place_index += 1
                 continue
             print(f"  {pid}: bin {tuple(round(v,2) for v in pick)} "
-                  f"-> pallet slot {tuple(round(v,2) for v in slot)}")
+                  f"-> pallet {tuple(round(v,2) for v in slot)}")
             if node.pick_place(pid, pick, slot):
                 placed += 1
                 place_index += 1

@@ -1,30 +1,31 @@
-Phase 2 palletizing cell: full pick-and-place on the ROS 2 / MoveIt 2 stack.
+Phase 2 palletizing cell: industrial pick-and-place on ROS 2 / MoveIt 2.
 Recorded 2026-07-26. ROS 2 Jazzy, Ubuntu 24.04, mock hardware, headless.
 
     ros2 launch armik_moveit ur5e_gripper_moveit.launch.py launch_rviz:=false
     ros2 run armik_moveit palletize
 
-The UR5e transfers 4 parts from the supply bin to a 2x2 pallet, routing every
-transfer through a high waypoint above the machine fixture, gripping with the
-Robotiq 2F-85, and filling the pallet back-to-front so no placement reaches over
-an already-placed part. Parts move as attached collision objects (mock hardware
-has no physics grasp).
+Approach (see docs/ENGINEERING_PLAN.md):
+  - Consistent top-down grasp: each station's joint config from one /compute_ik
+    seed, so the tool always arrives straight down in the same posture.
+  - OMPL obstacle-avoiding transfers to those joint configs (routes around the
+    separator); Pilz LIN straight-line descents/retreats.
+  - Part attached at the true grasp offset (tool-z down), so it stays exactly
+    where it sat, no teleport.
+  - Reachability pre-check; back-to-front pallet filling; metrics.
 
 Run:
-    cell: supply_bin, pallet, fixture | 4 parts in the bin
-      part_0: bin (0.39, -0.36) -> pallet slot (0.38, 0.39)
-      part_1: bin (0.51, -0.36) -> pallet slot (0.52, 0.39)
-      part_2: bin (0.39, -0.24) -> pallet slot (0.38, 0.25)
-      part_3: bin (0.51, -0.24) -> pallet slot (0.52, 0.25)
+    cell: table, supply_bin, pallet, separator | 4 parts in the bin
+      part_0: bin (0.41,-0.36) -> pallet (0.39,0.38)
+      part_1: bin (0.53,-0.36) -> pallet (0.54,0.38)
+      part_2: bin (0.41,-0.24) -> pallet (0.39,0.22)
+      part_3: bin (0.53,-0.24) -> pallet (0.54,0.22)
 
     === palletizing metrics ===
     parts placed : 4/4
-    rejected     : 0 (unreachable slots)
-    re-plans     : 8
-    cycle time   : ~50-85 s/part (mock hardware, includes OMPL planning + retries)
+    rejected     : 0
+    re-plans     : 0
+    cycle time   : 7.6 s/part
     RESULT: PASS
 
-Features: parametric bin->pallet transfer, multi-layer capable (LAYERS), a
-reachability pre-check that rejects out-of-workspace slots, gripper pick/place,
-and production-style metrics. This is the ROS/MoveIt version of the Phase 1
-MuJoCo palletizing cell.
+Was ~100 s/part and 2/4 with the first (OMPL position-only) version; the
+industrial rewrite is ~13x faster and reliable.

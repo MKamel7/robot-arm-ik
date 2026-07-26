@@ -1,46 +1,75 @@
-"""Populate the MoveIt planning scene for the palletizing cell.
+"""The palletizing cell: geometry and MoveIt planning-scene population.
 
-Adds three collision objects in the arm's base_link frame, mirroring the Phase 1
-MuJoCo cell: a supply bin (-y side), a pallet (+y side), and a machine fixture
-standing between them. The fixture is tall enough that a straight bin-to-pallet
-path collides with it, so OMPL has to route around, the ROS version of the
-collision-aware routing from the standalone cell.
+A proper workcell sitting on a table in the arm's base_link frame: a table
+surface, a supply bin and a pallet as distinct platforms, a separator wall
+standing between them, and coloured parts in the bin. This module is the single
+source of the cell geometry, the palletizing node imports from here.
 
-    ros2 run armik_moveit populate_scene        # add the cell (default)
+    ros2 run armik_moveit populate_scene         # add the cell (default)
     ros2 run armik_moveit populate_scene --clear # remove it again
-
-Geometry lives in scene_config so the palletizing node can share it.
 """
 import sys
 
 import rclpy
 from geometry_msgs.msg import Pose
-from moveit_msgs.msg import CollisionObject, PlanningScene
+from moveit_msgs.msg import CollisionObject, ObjectColor, PlanningScene
 from moveit_msgs.srv import ApplyPlanningScene
 from rclpy.node import Node
 from shape_msgs.msg import SolidPrimitive
+from std_msgs.msg import ColorRGBA
 
 BASE_FRAME = "base_link"
 
-# Box collision objects: id -> (size_xyz, center_xyz), all in BASE_FRAME (metres).
-CELL_OBJECTS = {
-    # Supply bin the arm picks from (front-right of the base).
-    "supply_bin": ((0.24, 0.20, 0.10), (0.45, -0.30, 0.05)),
-    # Pallet the arm stacks onto (front-left of the base).
-    "pallet": ((0.30, 0.30, 0.08), (0.45, 0.32, 0.04)),
-    # Machine fixture standing between bin and pallet: a straight bin->pallet
-    # transfer at working height would clip this, so the planner must go around.
-    "fixture": ((0.10, 0.12, 0.60), (0.45, 0.0, 0.30)),
+# --- cell geometry: id -> (size_xyz, center_xyz, rgb) in BASE_FRAME (metres) ---
+# Table top sits at z = 0 (the arm is mounted at its near edge); everything else
+# rests on the table. x starts well in front of the base so the table never
+# collides with the arm's own base links.
+TABLE = ((0.66, 1.10, 0.04), (0.47, 0.0, -0.02), (0.55, 0.55, 0.58))
+SUPPLY_BIN = ((0.26, 0.24, 0.08), (0.47, -0.30, 0.04), (0.30, 0.42, 0.60))
+PALLET = ((0.34, 0.34, 0.06), (0.47, 0.30, 0.03), (0.62, 0.46, 0.26))
+# The separator/divider between the bin (-y) and the pallet (+y). Kept low
+# enough (0.14 m) that the forearm clears it in the top-down placement posture.
+SEPARATOR = ((0.34, 0.04, 0.14), (0.45, 0.0, 0.07), (0.90, 0.50, 0.10))
+
+STRUCTURES = {
+    "table": TABLE,
+    "supply_bin": SUPPLY_BIN,
+    "pallet": PALLET,
+    "separator": SEPARATOR,
+}
+
+# Parts (0.04 m cubes) rest on the supply-bin top (z 0.08 + half part). A small
+# clearance keeps them just above the surface so a part resting on the bin/pallet
+# is not flagged as a collision once it is attached to the gripper.
+PART_SIZE = 0.04
+CLEARANCE = 0.006
+BIN_TOP = SUPPLY_BIN[1][2] + SUPPLY_BIN[0][2] / 2      # 0.08
+PART_Z = BIN_TOP + PART_SIZE / 2 + CLEARANCE
+PART_COLORS = {
+    "part_0": (0.85, 0.15, 0.15), "part_1": (0.15, 0.70, 0.20),
+    "part_2": (0.15, 0.35, 0.85), "part_3": (0.90, 0.75, 0.10),
 }
 
 
-def _box(object_id: str, size, center) -> CollisionObject:
+def _grid(cx, cy, nx, ny, sx, sy):
+    return [(cx + (i - (nx - 1) / 2) * sx, cy + (j - (ny - 1) / 2) * sy)
+            for j in range(ny) for i in range(nx)]
+
+
+# Pick cells on the bin, pallet slots (filled back-to-front), transit waypoint.
+PICK_CELLS = [(x, y, PART_Z) for x, y in _grid(0.47, -0.30, 2, 2, 0.12, 0.12)]
+PALLET_TOP = PALLET[1][2] + PALLET[0][2] / 2            # 0.06
+PALLET_XY = sorted(_grid(0.47, 0.30, 2, 2, 0.15, 0.15), key=lambda p: (-p[1], p[0]))
+# High central waypoint clear of the separator wall (top 0.34 m).
+TRANSIT = (0.30, 0.0, 0.52)
+REACH_MAX = 0.82
+
+
+def _box(object_id, size, center):
     obj = CollisionObject()
     obj.header.frame_id = BASE_FRAME
     obj.id = object_id
-    prim = SolidPrimitive()
-    prim.type = SolidPrimitive.BOX
-    prim.dimensions = [float(s) for s in size]
+    prim = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[float(s) for s in size])
     pose = Pose()
     pose.position.x, pose.position.y, pose.position.z = (float(c) for c in center)
     pose.orientation.w = 1.0
@@ -50,17 +79,27 @@ def _box(object_id: str, size, center) -> CollisionObject:
     return obj
 
 
-def build_scene(clear: bool) -> PlanningScene:
+def _color(object_id, rgb, alpha=1.0):
+    oc = ObjectColor()
+    oc.id = object_id
+    oc.color = ColorRGBA(r=float(rgb[0]), g=float(rgb[1]), b=float(rgb[2]), a=alpha)
+    return oc
+
+
+def build_scene(clear):
+    """PlanningScene diff that adds (or removes) the cell structures + colors."""
     scene = PlanningScene()
     scene.is_diff = True
-    for object_id, (size, center) in CELL_OBJECTS.items():
+    for object_id, (size, center, rgb) in STRUCTURES.items():
         obj = _box(object_id, size, center)
         obj.operation = CollisionObject.REMOVE if clear else CollisionObject.ADD
         scene.world.collision_objects.append(obj)
+        if not clear:
+            scene.object_colors.append(_color(object_id, rgb))
     return scene
 
 
-def main() -> None:
+def main():
     clear = "--clear" in sys.argv
     rclpy.init()
     node = Node("populate_scene")
@@ -69,15 +108,12 @@ def main() -> None:
         node.get_logger().error("/apply_planning_scene not available (is move_group up?)")
         rclpy.shutdown()
         sys.exit(1)
-
-    req = ApplyPlanningScene.Request()
-    req.scene = build_scene(clear)
+    req = ApplyPlanningScene.Request(scene=build_scene(clear))
     future = client.call_async(req)
     rclpy.spin_until_future_complete(node, future)
     ok = future.result() is not None and future.result().success
-    action = "cleared" if clear else "added"
-    print(f"planning scene {action}: {'OK' if ok else 'FAILED'} "
-          f"({', '.join(CELL_OBJECTS)})")
+    print(f"planning scene {'cleared' if clear else 'added'}: "
+          f"{'OK' if ok else 'FAILED'} ({', '.join(STRUCTURES)})")
     node.destroy_node()
     rclpy.shutdown()
     sys.exit(0 if ok else 1)
