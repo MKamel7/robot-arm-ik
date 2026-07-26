@@ -40,14 +40,33 @@
   <xacro:include filename="$(find robotiq_description)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
   <xacro:ur_to_robotiq prefix="$(arg tf_prefix)" connected_to="$(arg tf_prefix)tool0"/>
 
-  <!-- Robotiq 2F-85 gripper (+ its own mock-hardware ros2_control) -->
+  <!-- Robotiq 2F-85 gripper links/joints only. Its bundled ros2_control block is
+       skipped (include_ros2_control=false): with mock hardware it puts command
+       interfaces on the mimic joints, which mock_components/GenericSystem rejects
+       ("activated mimic joints cannot have command interfaces"). -->
   <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
   <xacro:robotiq_gripper
     name="RobotiqGripper"
     prefix="$(arg tf_prefix)"
     parent="$(arg tf_prefix)gripper_mount_link"
     use_fake_hardware="true"
-    include_ros2_control="true">
+    include_ros2_control="false">
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:robotiq_gripper>
+
+  <!-- Minimal gripper ros2_control: drive only the active knuckle joint. The
+       five mimic finger joints are computed by robot_state_publisher from the
+       URDF mimic tags, so they need no command/state interfaces here. -->
+  <ros2_control name="RobotiqGripper" type="system">
+    <hardware>
+      <plugin>mock_components/GenericSystem</plugin>
+    </hardware>
+    <joint name="$(arg tf_prefix)robotiq_85_left_knuckle_joint">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
 </robot>

@@ -1,0 +1,22 @@
+Phase 2 gripper: UR5e + Robotiq 2F-85 MoveIt 2 config verified headless (mock hardware).
+Recorded 2026-07-26. ROS 2 Jazzy, Ubuntu 24.04.
+
+Command:
+    ros2 launch armik_moveit ur5e_gripper_moveit.launch.py launch_rviz:=false
+
+Controllers active (ros2 control list_controllers):
+    joint_trajectory_controller   joint_trajectory_controller/JointTrajectoryController   active
+    robotiq_gripper_controller    position_controllers/GripperActionController            active
+    joint_state_broadcaster       joint_state_broadcaster/JointStateBroadcaster           active
+
+Arm (MoveIt plan + execute, ros2 run armik_moveit plan_execute_smoke):
+    MoveItErrorCode: 1 (SUCCESS)
+    reached target within 0.009 rad
+    RESULT: PASS
+
+Gripper (control_msgs/action/GripperCommand on /robotiq_gripper_controller/gripper_cmd):
+    close (position 0.8): reached_goal: true, status SUCCEEDED
+    open  (position 0.0): reached_goal: true, status SUCCEEDED
+
+So MoveIt plans and executes the arm, and the 2F-85 opens/closes as a controlled
+end effector, on one combined description driving both ros2_control and MoveIt.
