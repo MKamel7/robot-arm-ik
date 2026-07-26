@@ -96,17 +96,18 @@
       </link>
     </model>
 
-    <!-- Downward RGB-D camera over the bin (0.75 m above the bin top) -->
+    <!-- Downward RGB-D camera over the bin. Raised and widened so the whole
+         bin footprint stays in view even when parts are scattered to the edges. -->
     <model name="rgbd_camera">
       <static>true</static>
-      <pose>0.47 -0.32 0.85 0 1.5707963 0</pose>
+      <pose>0.47 -0.32 1.00 0 1.5707963 0</pose>
       <link name="link">
         <sensor name="rgbd" type="rgbd_camera">
           <update_rate>10</update_rate>
           <always_on>true</always_on>
           <topic>rgbd_camera</topic>
           <camera>
-            <horizontal_fov>1.0472</horizontal_fov>
+            <horizontal_fov>1.2217</horizontal_fov>
             <image><width>640</width><height>480</height><format>R8G8B8</format></image>
             <clip><near>0.05</near><far>3.0</far></clip>
           </camera>

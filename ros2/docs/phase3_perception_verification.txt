@@ -42,3 +42,20 @@ tracked them to ~1 mm, and the palletizer picked the perceived poses:
     parts placed : 3/3 (3 of 4 detected; the 4th sat at the camera edge)
     0 re-plans, ~9.7 s/part, RESULT: PASS
 The system palletizes what it sees and does not fake undetected parts.
+
+--- Phase 3 polish (one-command, all 4, orientation, robustness) ---
+    ros2 launch armik_moveit perception_palletizing.launch.py   # perception + MoveIt
+    PICK_SOURCE=perception ros2 run armik_moveit palletize
+
+Improvements:
+  - camera raised + FOV widened -> all four parts stay in view (4/4 detected),
+  - detector estimates each part's orientation by PCA of the colour blob and
+    publishes it; the palletizer folds the yaw into the cube's 90-deg symmetry
+    (+-45 deg) and grasps at that yaw,
+  - reachability pre-check on the perceived picks (skips out-of-workspace parts),
+  - median depth over the blob + clamp to the known bin surface (depth noise
+    can no longer spawn a part penetrating the bin),
+  - one-command bringup (perception + MoveIt together).
+
+Run: perceived 4 parts, yaws +8/-42/-45/-8 deg, 4/4 placed, 0 failed,
+0 re-plans, ~10 s/part, RESULT: PASS.

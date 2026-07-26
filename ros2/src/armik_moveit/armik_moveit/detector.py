@@ -10,6 +10,8 @@ comparison so accuracy is visible.
     ros2 launch armik_moveit perception.launch.py
     ros2 run   armik_moveit detector
 """
+import math
+
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose, PoseArray
@@ -17,7 +19,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 
 # Camera link pose in world (matches perception_cell.sdf): straight down.
-CAM_XYZ = np.array([0.47, -0.32, 0.85])
+CAM_XYZ = np.array([0.47, -0.32, 1.00])
 CAM_PITCH = 1.5707963  # rot about y so the sensor +x looks down (-z world)
 
 # Colour thresholds in RGB (0-255): (name, R>, G, B) predicate via ranges.
@@ -74,6 +76,10 @@ class Detector(Node):
     def _on_info(self, msg):
         self.k = np.array(msg.k).reshape(3, 3)
 
+    def _deproject(self, u, v, d, fx, fy, cx, cy):
+        p_opt = np.array([(u - cx) / fx * d, (v - cy) / fy * d, d, 1.0])
+        return self.t_wo @ p_opt
+
     def detect(self):
         if self.rgb is None or self.depth is None or self.k is None:
             return
@@ -92,21 +98,33 @@ class Detector(Node):
                 continue
             ys, xs = np.nonzero(mask)
             u, v = xs.mean(), ys.mean()
-            d = float(self.depth[int(round(ys.mean())), int(round(xs.mean()))])
-            if not np.isfinite(d) or d <= 0:
+            # median depth over the blob's valid pixels (robust to edge noise)
+            dvals = self.depth[ys, xs]
+            dvals = dvals[np.isfinite(dvals) & (dvals > 0)]
+            if dvals.size == 0:
                 print(f"  {name:6}: no depth")
                 continue
-            # deproject pixel -> camera optical frame -> world
-            p_opt = np.array([(u - cx) / fx * d, (v - cy) / fy * d, d, 1.0])
-            p_world = self.t_wo @ p_opt
+            d = float(np.median(dvals))
+            p_world = self._deproject(u, v, d, fx, fy, cx, cy)
+
+            # orientation: PCA of the blob's principal axis, mapped to a world
+            # yaw by deprojecting the centroid and a point along that axis.
+            pts = np.column_stack([xs - u, ys - v]).astype(float)
+            cov = pts.T @ pts / max(len(pts), 1)
+            evals, evecs = np.linalg.eigh(cov)
+            major = evecs[:, int(np.argmax(evals))]
+            p_axis = self._deproject(u + major[0] * 10, v + major[1] * 10, d, fx, fy, cx, cy)
+            yaw = math.atan2(p_axis[1] - p_world[1], p_axis[0] - p_world[0])
+
             gx, gy = GROUND_TRUTH.get(name, (float("nan"), float("nan")))
             err = np.hypot(p_world[0] - gx, p_world[1] - gy) * 1000
             print(f"  {name:6}: world ({p_world[0]:.3f}, {p_world[1]:.3f}, {p_world[2]:.3f})"
-                  f"  gt ({gx:.2f}, {gy:.2f})  err {err:.0f} mm")
+                  f"  yaw {math.degrees(yaw):+.0f} deg  gt ({gx:.2f}, {gy:.2f})  err {err:.0f} mm")
             pose = Pose()
             pose.position.x, pose.position.y, pose.position.z = (
                 float(p_world[0]), float(p_world[1]), float(p_world[2]))
-            pose.orientation.w = 1.0
+            pose.orientation.z = math.sin(yaw / 2)
+            pose.orientation.w = math.cos(yaw / 2)
             arr.poses.append(pose)
         self.pub.publish(arr)
 

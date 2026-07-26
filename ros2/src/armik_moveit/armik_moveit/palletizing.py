@@ -191,8 +191,13 @@ class Palletizer(Node):
         return self._apply(scene)
 
     # --- kinematics + motion ---
-    def ik_topdown(self, x, y, z):
-        """Top-down /compute_ik at (x,y,z) from the consistent seed. None if no IK."""
+    def ik_topdown(self, x, y, z, yaw=None):
+        """Top-down /compute_ik at (x,y,z) from the consistent seed. None if no IK.
+
+        yaw rotates the top-down grasp about the vertical (defaults to the
+        comfortable GRASP_YAW; a perceived part passes its detected yaw).
+        """
+        quat = GRASP_QUAT if yaw is None else q_down(yaw)
         req = GetPositionIK.Request()
         r = req.ik_request
         r.group_name = GROUP
@@ -205,7 +210,7 @@ class Palletizer(Node):
         ps.header.frame_id = BASE
         ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = x, y, z
         (ps.pose.orientation.x, ps.pose.orientation.y,
-         ps.pose.orientation.z, ps.pose.orientation.w) = GRASP_QUAT
+         ps.pose.orientation.z, ps.pose.orientation.w) = quat
         r.pose_stamped = ps
         self.ik.wait_for_service(timeout_sec=10.0)
         fut = self.ik.call_async(req)
@@ -274,8 +279,9 @@ class Palletizer(Node):
             print(f"      move '{label}' failed")
         return False
 
-    def lin(self, x, y, z, vel=0.25, label=""):
-        """Pilz LIN (straight line) to a top-down pose."""
+    def lin(self, x, y, z, vel=0.25, label="", yaw=None):
+        """Pilz LIN (straight line) to a top-down pose (yaw optional)."""
+        quat = GRASP_QUAT if yaw is None else q_down(yaw)
         req = self._pilz("LIN", vel)
         c = Constraints()
         pc = PositionConstraint()
@@ -293,7 +299,7 @@ class Palletizer(Node):
         oc.header.frame_id = BASE
         oc.link_name = EEF
         (oc.orientation.x, oc.orientation.y,
-         oc.orientation.z, oc.orientation.w) = GRASP_QUAT
+         oc.orientation.z, oc.orientation.w) = quat
         oc.absolute_x_axis_tolerance = 0.05
         oc.absolute_y_axis_tolerance = 0.05
         oc.absolute_z_axis_tolerance = 0.05
@@ -340,11 +346,18 @@ class Palletizer(Node):
             # part centre = detected top - half a part, + clearance (so a part
             # resting on the bin is not flagged in collision), then into base frame
             z_center_base = (p.position.z - PART_SIZE / 2 + CLEARANCE) - MOUNT_H
-            picks.append((p.position.x, p.position.y, z_center_base))
+            # Parts rest on the known bin surface; clamp so depth noise cannot
+            # push the spawned part below it (which would read as a collision).
+            z_center_base = max(z_center_base, PART_Z)
+            yaw = 2.0 * math.atan2(p.orientation.z, p.orientation.w)  # detected part yaw
+            # a cube grasp is 90-deg symmetric: fold the yaw into [-45, 45] deg so
+            # the gripper aligns with the part but the wrist stays comfortable.
+            yaw = ((yaw + math.pi / 4) % (math.pi / 2)) - math.pi / 4
+            picks.append((p.position.x, p.position.y, z_center_base, yaw))
         return picks
 
     # --- one pick and place ---
-    def pick_place(self, part_id, pick, place, transit_cfg):
+    def pick_place(self, part_id, pick, place, transit_cfg, pick_yaw=None):
         px, py, pz = pick
         qx, qy, qz = place
         grasp_z = pz + GRIPPER_LEN
@@ -353,16 +366,17 @@ class Palletizer(Node):
         place_appr = place_z + APPROACH_DZ
 
         self.gripper(GRIP_OPEN)
-        # PICK: PTP above bin (top-down), LIN down, grip, attach, LIN up
-        if not self.move_config(self.ik_topdown(px, py, appr_z), label="above-bin"):
+        # PICK: reach above the part at its detected grasp yaw, LIN down, grip,
+        # attach, LIN up (the pick-side moves use pick_yaw; the place uses default)
+        if not self.move_config(self.ik_topdown(px, py, appr_z, yaw=pick_yaw), label="above-bin"):
             return False
-        if not self.lin(px, py, grasp_z, label="descend-pick"):
+        if not self.lin(px, py, grasp_z, label="descend-pick", yaw=pick_yaw):
             return False
         self.gripper(GRIP_CLOSED)
         self.attach_part(part_id)
         attached = True
         try:
-            if not self.lin(px, py, appr_z, label="lift"):
+            if not self.lin(px, py, appr_z, label="lift", yaw=pick_yaw):
                 return False
             # TRANSFER: via a high central config, so each OMPL plan around the
             # tall separator is short and reliable, then down over the slot.
@@ -392,6 +406,7 @@ def main():
     try:
         node._apply(build_scene(clear=False))
         # Pick source: hard-coded bin cells, or poses perceived by the camera.
+        # Each entry is (x, y, z, yaw); fixed cells use the default grasp yaw.
         if os.environ.get("PICK_SOURCE") == "perception":
             print("waiting for /detected_parts (run perception.launch.py) ...")
             cells = node.perceived_picks()
@@ -400,49 +415,59 @@ def main():
                 sys.exit(1)
             print(f"perceived {len(cells)} parts from the camera")
         else:
-            cells = PICK_CELLS
+            cells = [(x, y, z, None) for (x, y, z) in PICK_CELLS]
+
+        # Reachability pre-check on the picks: skip any part outside the workspace.
         parts = []
-        for i, (x, y, z) in enumerate(cells):
+        rejected = 0
+        for i, (x, y, z, yaw) in enumerate(cells):
+            if not reachable(x, y, z):
+                print(f"  part_{i}: pick ({x:.2f}, {y:.2f}) OUT OF REACH -> rejected")
+                rejected += 1
+                continue
             pid = f"part_{i}"
             node.add_part(pid, x, y, z)
-            parts.append((pid, (x, y, z)))
+            parts.append((pid, (x, y, z), yaw))
         time.sleep(0.5)
-        print(f"cell: {', '.join(STRUCTURES)} | {len(parts)} parts")
+        print(f"cell: {', '.join(STRUCTURES)} | {len(parts)} reachable parts")
 
         if not node.go_home():
             print("could not reach home; aborting")
             sys.exit(1)
         transit_cfg = node.ik_topdown(*TRANSIT) or HOME
 
-        placed = rejected = 0
+        placed = failed = 0
         t0 = time.time()
         place_index = 0
-        for pid, pick in parts:
+        for pid, pick, yaw in parts:
             slot = slot_pose(place_index)
             if not reachable(*slot):
                 print(f"  {pid}: slot {slot} OUT OF REACH -> rejected")
                 rejected += 1
                 place_index += 1
                 continue
-            print(f"  {pid}: bin {tuple(round(v,2) for v in pick)} "
+            ang = "" if yaw is None else f" yaw {math.degrees(yaw):+.0f}"
+            print(f"  {pid}: bin {tuple(round(v,2) for v in pick)}{ang} "
                   f"-> pallet {tuple(round(v,2) for v in slot)}")
-            if node.pick_place(pid, pick, slot, transit_cfg):
+            if node.pick_place(pid, pick, slot, transit_cfg, pick_yaw=yaw):
                 placed += 1
                 place_index += 1
             else:
                 print(f"    {pid}: FAILED")
+                failed += 1
         node.go_home()
         elapsed = time.time() - t0
 
         cycle = elapsed / placed if placed else float("nan")
         print("\n=== palletizing metrics ===")
         print(f"parts placed : {placed}/{len(parts)}")
-        print(f"rejected     : {rejected} (unreachable slots)")
+        print(f"rejected     : {rejected} (out of reach)")
+        print(f"failed       : {failed}")
         print(f"re-plans     : {node.replans}")
         print(f"total time   : {elapsed:.1f} s")
         print(f"cycle time   : {cycle:.1f} s/part")
-        print("RESULT:", "PASS" if placed == len(parts) - rejected and placed > 0 else "FAIL")
-        sys.exit(0 if placed > 0 else 1)
+        print("RESULT:", "PASS" if failed == 0 and placed > 0 else "FAIL")
+        sys.exit(0 if placed > 0 and failed == 0 else 1)
     finally:
         node.destroy_node()
         rclpy.try_shutdown()
