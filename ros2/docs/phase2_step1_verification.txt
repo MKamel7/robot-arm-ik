@@ -1,0 +1,27 @@
+Phase 2 step 1 verification: UR5e + MoveIt 2 bringup on ROS 2 Jazzy (Ubuntu 24.04)
+Recorded 2026-07-26. Mock hardware, headless (launch_rviz:=false).
+
+Command:
+    ros2 launch armik_moveit ur5e_moveit.launch.py launch_rviz:=false
+    ros2 run armik_moveit plan_execute_smoke
+
+1) One-command bringup reached planning-ready state. move_group loaded the
+   planning pipelines and reported readiness:
+       Successfully loaded planner 'Pilz Industrial Motion Planner'
+       Successfully loaded planner 'CHOMP'
+       Successfully loaded planner 'OMPL'
+       Successfully loaded planner 'STOMP'
+       You can start planning now!
+
+2) Headless Plan-and-Execute smoke test:
+       start : shoulder_pan 0.0, shoulder_lift -1.57, elbow 0.0,
+               wrist_1 -1.57, wrist_2 0.0, wrist_3 0.0
+       target: shoulder_pan 0.4, shoulder_lift -1.2, elbow 0.8
+               (nudged, reachable, collision-free)
+       MoveItErrorCode: 1 (SUCCESS)
+       reached within max joint error 0.009 rad of target
+       RESULT: PASS
+
+This is the headless equivalent of dragging the RViz interactive marker and
+hitting Plan & Execute: MoveGroup planned with OMPL and the trajectory executed
+on the ros2_control mock hardware.

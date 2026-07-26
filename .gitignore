@@ -9,3 +9,8 @@ MUJOCO_LOG.TXT
 
 # rendered videos live in the portfolio, not here
 docs/*.mp4
+
+# ROS 2 colcon build artifacts (Phase 2 workspace under ros2/)
+ros2/build/
+ros2/install/
+ros2/log/
