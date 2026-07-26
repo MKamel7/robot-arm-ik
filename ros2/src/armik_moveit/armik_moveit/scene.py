@@ -24,12 +24,13 @@ BASE_FRAME = "base_link"
 # Table top sits at z = 0 (the arm is mounted at its near edge); everything else
 # rests on the table. x starts well in front of the base so the table never
 # collides with the arm's own base links.
-TABLE = ((0.66, 1.10, 0.04), (0.47, 0.0, -0.02), (0.55, 0.55, 0.58))
-SUPPLY_BIN = ((0.26, 0.24, 0.08), (0.47, -0.30, 0.04), (0.30, 0.42, 0.60))
-PALLET = ((0.34, 0.34, 0.06), (0.47, 0.30, 0.03), (0.62, 0.46, 0.26))
-# The separator/divider between the bin (-y) and the pallet (+y). Kept low
-# enough (0.14 m) that the forearm clears it in the top-down placement posture.
-SEPARATOR = ((0.34, 0.04, 0.14), (0.45, 0.0, 0.07), (0.90, 0.50, 0.10))
+TABLE = ((0.66, 1.20, 0.04), (0.47, 0.0, -0.02), (0.55, 0.55, 0.58))
+SUPPLY_BIN = ((0.26, 0.24, 0.08), (0.47, -0.32, 0.04), (0.30, 0.42, 0.60))
+PALLET = ((0.34, 0.34, 0.06), (0.47, 0.36, 0.03), (0.62, 0.46, 0.26))
+# The separator wall between the bin (-y) and the pallet (+y). Taller now (0.28 m
+# wall); the bin and pallet are pushed further apart so the arm still clears it
+# in the top-down placement posture.
+SEPARATOR = ((0.34, 0.04, 0.28), (0.45, 0.0, 0.14), (0.90, 0.50, 0.10))
 
 STRUCTURES = {
     "table": TABLE,
@@ -57,9 +58,9 @@ def _grid(cx, cy, nx, ny, sx, sy):
 
 
 # Pick cells on the bin, pallet slots (filled back-to-front), transit waypoint.
-PICK_CELLS = [(x, y, PART_Z) for x, y in _grid(0.47, -0.30, 2, 2, 0.12, 0.12)]
+PICK_CELLS = [(x, y, PART_Z) for x, y in _grid(0.47, -0.32, 2, 2, 0.12, 0.12)]
 PALLET_TOP = PALLET[1][2] + PALLET[0][2] / 2            # 0.06
-PALLET_XY = sorted(_grid(0.47, 0.30, 2, 2, 0.15, 0.15), key=lambda p: (-p[1], p[0]))
+PALLET_XY = sorted(_grid(0.47, 0.36, 2, 2, 0.15, 0.15), key=lambda p: (-p[1], p[0]))
 # High central waypoint clear of the separator wall (top 0.34 m).
 TRANSIT = (0.30, 0.0, 0.52)
 REACH_MAX = 0.82

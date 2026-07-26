@@ -253,11 +253,11 @@ class Palletizer(Node):
             if label:
                 print(f"      no IK for '{label}'")
             return False
-        for _ in range(2):
+        for _ in range(3):
             req = MotionPlanRequest()
             req.group_name = GROUP  # default OMPL pipeline
-            req.num_planning_attempts = 12
-            req.allowed_planning_time = 8.0
+            req.num_planning_attempts = 16
+            req.allowed_planning_time = 12.0
             req.max_velocity_scaling_factor = vel
             req.max_acceleration_scaling_factor = vel
             c = Constraints()
@@ -321,7 +321,7 @@ class Palletizer(Node):
         return self.move_config(HOME, label="home")
 
     # --- one pick and place ---
-    def pick_place(self, part_id, pick, place):
+    def pick_place(self, part_id, pick, place, transit_cfg):
         px, py, pz = pick
         qx, qy, qz = place
         grasp_z = pz + GRIPPER_LEN
@@ -341,7 +341,9 @@ class Palletizer(Node):
         try:
             if not self.lin(px, py, appr_z, label="lift"):
                 return False
-            # TRANSFER: OMPL routes around the separator to the slot approach
+            # TRANSFER: via a high central config, so each OMPL plan around the
+            # tall separator is short and reliable, then down over the slot.
+            self.move_config(transit_cfg, label="transit")
             if not self.move_config(self.ik_topdown(qx, qy, place_appr), label="above-pallet"):
                 return False
             # PLACE: LIN down, release, detach at the slot, LIN up
@@ -377,6 +379,7 @@ def main():
         if not node.go_home():
             print("could not reach home; aborting")
             sys.exit(1)
+        transit_cfg = node.ik_topdown(*TRANSIT) or HOME
 
         placed = rejected = 0
         t0 = time.time()
@@ -390,7 +393,7 @@ def main():
                 continue
             print(f"  {pid}: bin {tuple(round(v,2) for v in pick)} "
                   f"-> pallet {tuple(round(v,2) for v in slot)}")
-            if node.pick_place(pid, pick, slot):
+            if node.pick_place(pid, pick, slot, transit_cfg):
                 placed += 1
                 place_index += 1
             else:
