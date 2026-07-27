@@ -102,10 +102,27 @@ Two Jazzy specifics baked into the launch (easy to miss): the mock-hardware flag
 is `use_mock_hardware`, and `ur_control` can leave the trajectory controller
 inactive so the launch re-activates it.
 
+## Factory integration
+
+Beyond the palletizing cell, the same arm runs a **colour-sorting cell** with the
+production-integration layers a factory needs:
+
+- **Colour sorting to a conveyor** (`color_sort`) with random part placement, a
+  3-button GUI (`sort_gui`) that validates orders (refuses double-orders and
+  absent colours), and a moving outfeed belt.
+- **OPC UA fieldbus** (`opcua_server`, `opc.tcp://:4840/cell/`) so a PLC/SCADA
+  commands sorts and reads live process values and the safety state.
+- **Live OEE dashboard** (`dashboard`, http://localhost:8080) with a safety banner.
+- **Functional safety** (`safety_supervisor`) — latched e-stop, guard interlock,
+  speed-and-separation monitoring (ISO/TS 15066), watchdog, reset. See
+  [`docs/SAFETY.md`](docs/SAFETY.md).
+- **Real-hardware ready** — `use_mock_hardware:=false robot_ip:=<ip>` switches to
+  a physical UR5e + Robotiq 2F-85. See [`docs/HARDWARE.md`](docs/HARDWARE.md).
+
 ## Status and roadmap
 
 - Done: bringup, 2F-85 integration, planning scene, industrial palletizing cell,
-  pedestal-mounted layout.
-- Next: **Phase 3, perception-driven bin picking** (an RGB-D camera and pose
-  estimation feed real grasp poses instead of known bin cells).
-- Advanced: MoveIt Task Constructor for task-level grasp planning.
+  pedestal-mounted layout, perception-driven bin picking, colour sorting, OPC UA
+  + dashboard, functional safety, hardware-ready description.
+- Advanced next: MoveIt Task Constructor for task-level grasp planning;
+  continuous conveyor tracking (pick-on-the-fly) on real hardware.
