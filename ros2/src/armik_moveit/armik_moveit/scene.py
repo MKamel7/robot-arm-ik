@@ -54,7 +54,19 @@ PART_Z = BIN_TOP + PART_SIZE / 2 + CLEARANCE - MOUNT_H  # base_link frame
 PART_COLORS = {
     "part_0": (0.85, 0.15, 0.15), "part_1": (0.15, 0.70, 0.20),
     "part_2": (0.15, 0.35, 0.85), "part_3": (0.90, 0.75, 0.10),
+    "part_red": (0.85, 0.15, 0.15), "part_green": (0.15, 0.70, 0.20),
+    "part_blue": (0.15, 0.35, 0.85),
 }
+
+# --- colour-sorting cell: the same table + supply bin, but the place target is a
+# conveyor belt. Three colour-coded parts sit on the bin; a button picks one.
+CONVEYOR = ((0.24, 0.44, 0.14), (0.47, 0.36, 0.07), (0.16, 0.16, 0.18))
+SORT_STRUCTURES = {"table": TABLE, "supply_bin": SUPPLY_BIN, "conveyor": CONVEYOR}
+SORT_PARTS = {  # colour -> (x, y) on the bin top
+    "red": (0.41, -0.38), "green": (0.47, -0.32), "blue": (0.53, -0.26),
+}
+CONVEYOR_TOP = CONVEYOR[1][2] + CONVEYOR[0][2] / 2 - MOUNT_H  # base_link frame
+CONVEYOR_DROP = (0.47, 0.36)  # place x,y on the belt
 
 
 def _grid(cx, cy, nx, ny, sx, sy):
@@ -92,11 +104,10 @@ def _color(object_id, rgb, alpha=1.0):
     return oc
 
 
-def build_scene(clear):
-    """PlanningScene diff that adds (or removes) the cell structures + colors."""
+def _structures_scene(structures, clear):
     scene = PlanningScene()
     scene.is_diff = True
-    for object_id, (size, center, rgb) in STRUCTURES.items():
+    for object_id, (size, center, rgb) in structures.items():
         cx, cy, cz = center
         obj = _box(object_id, size, (cx, cy, cz - MOUNT_H))  # drop into base_link frame
         obj.operation = CollisionObject.REMOVE if clear else CollisionObject.ADD
@@ -104,6 +115,16 @@ def build_scene(clear):
         if not clear:
             scene.object_colors.append(_color(object_id, rgb))
     return scene
+
+
+def build_scene(clear):
+    """PlanningScene diff for the palletizing cell (table/bin/pallet/separator)."""
+    return _structures_scene(STRUCTURES, clear)
+
+
+def build_sort_scene(clear):
+    """PlanningScene diff for the colour-sorting cell (table/bin/conveyor)."""
+    return _structures_scene(SORT_STRUCTURES, clear)
 
 
 def main():

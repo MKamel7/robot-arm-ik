@@ -29,6 +29,8 @@ setup(
             "scene_routing_check = armik_moveit.scene_routing_check:main",
             "palletize = armik_moveit.palletizing:main",
             "detector = armik_moveit.detector:main",
+            "color_sort = armik_moveit.color_sort:main",
+            "sort_gui = armik_moveit.sort_gui:main",
         ],
     },
 )
