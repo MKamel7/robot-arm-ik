@@ -1,0 +1,28 @@
+Real-hardware (HIL) verification: real UR driver + RTDE against URSim.
+Recorded 2026-07-27. ROS 2 Jazzy, Universal Robots URSim e-series (UR5e) in Docker.
+
+URSim is Universal Robots' official simulator; it speaks the SAME RTDE / primary
+interfaces and runs the SAME URControl as a physical UR5e. Connecting the real
+ur_robot_driver to it is a genuine hardware-in-the-loop test of the real
+hardware path (not mock_components).
+
+Setup:
+  - URSim e-series container (bridge network, IP 172.17.0.2), robot powered on and
+    brakes released via the dashboard (29999); Robotmode RUNNING, Safety NORMAL.
+  - Real driver: ros2 launch ur_robot_driver ur_control.launch.py ur_type:=ur5e \
+        robot_ip:=172.17.0.2 reverse_ip:=172.17.0.1 headless_mode:=true
+    -> connected over real RTDE; UR controllers activated (scaled_joint_trajectory_
+       controller, force_torque/tcp_pose/speed_scaling broadcasters, etc.).
+
+Results:
+  1) Direct trajectory to scaled_joint_trajectory_controller:
+        start joints [-1.60,-1.73,-2.20,-0.81,1.60,-0.03]
+        end   joints [-1.20,-1.40, 0.60,-1.70,-1.57, 0.00]  (result code 0)
+        max joint move 3.17 rad -> the real robot moved via RTDE.
+  2) MoveIt plan + execute (move_group -> real driver -> RTDE -> URSim):
+        MoveItErrorCode 1 (SUCCESS), reached target within 0.0099 rad.
+
+Conclusion: the real hardware interface (URPositionHardwareInterface / RTDE) and
+the full MoveIt -> real-robot motion pipeline are validated end to end. The cell's
+combined description uses this same interface (use_mock_hardware:=false); on a
+physical UR5e the same commands apply (robot_ip + calibration, see HARDWARE.md).
