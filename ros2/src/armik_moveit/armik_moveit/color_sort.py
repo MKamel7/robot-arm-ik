@@ -78,6 +78,14 @@ class ColorSorter(Palletizer):
         print("colour sorter ready: press RED / GREEN / BLUE "
               "(or publish red|green|blue on /target_color)")
 
+    def _convey_away(self, pid, place):
+        """Move the placed part along the belt (+y) and off the far end."""
+        x, y0, z = place
+        for k in range(1, 8):
+            self.add_part(pid, x, y0 + 0.24 * k / 7.0, z)  # travel down the belt
+            time.sleep(0.18)
+        self._remove_world(pid)
+
     def sort(self, color):
         if color not in SORT_PARTS:
             self.alarm, self.alarm_msg = True, f"unknown colour '{color}'"
@@ -95,7 +103,7 @@ class ColorSorter(Palletizer):
         t0 = time.time()
         ok = self.pick_place(pid, (x, y, PART_Z), place, self.transit_cfg)
         if ok:
-            self._remove_world(pid)  # the conveyor carries the part away
+            self._convey_away(pid, place)  # the belt carries the part down and off
             self.counts[color] += 1
             self.cycle_times.append(time.time() - t0)
         else:
