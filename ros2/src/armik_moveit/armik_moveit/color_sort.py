@@ -21,8 +21,8 @@ from std_msgs.msg import Bool, String
 
 from armik_moveit.palletizing import HOME, PART_SIZE, Palletizer
 from armik_moveit.scene import (
-    BIN_AREA, CLEARANCE, CONVEYOR_DROP, CONVEYOR_TOP, PART_Z, SORT_COLOURS,
-    TRANSIT, build_sort_scene,
+    BIN_AREA, CLEARANCE, CONVEYOR_TOP, PART_Z, SORT_COLOURS, TRANSIT,
+    build_sort_scene, lane_axis, lane_drop, lane_end,
 )
 
 
@@ -150,11 +150,15 @@ class ColorSorter(Palletizer):
         print(f"  new batch on the bin: "
               + ", ".join(f"{c}({x:.2f},{y:.2f})" for c, (x, y) in self.part_pos.items()))
 
-    def _convey_away(self, pid, place):
-        """Move the placed part along the belt (+y) and off the far end."""
-        x, y0, z = place
+    def _convey_away(self, pid, place, colour):
+        """Run the placed part out along its own lane and off the far end."""
+        x0, y0, z = place
+        ax, ay = lane_axis(colour)
+        ex, ey = lane_end(colour)
+        travel = math.hypot(ex - x0, ey - y0)
         for k in range(1, 8):
-            self.add_part(pid, x, y0 + 0.24 * k / 7.0, z)  # travel down the belt
+            d = travel * k / 7.0
+            self.add_part(pid, x0 + ax * d, y0 + ay * d, z)
             time.sleep(0.18)
         self._remove_world(pid)
 
@@ -183,13 +187,15 @@ class ColorSorter(Palletizer):
         x, y = self.part_pos[color]
         pid = f"part_{color}"
         drop_z = CONVEYOR_TOP + PART_SIZE / 2 + CLEARANCE
-        place = (CONVEYOR_DROP[0], CONVEYOR_DROP[1], drop_z)
-        print(f"  sorting {color} at ({x:.2f}, {y:.2f}) -> conveyor ...")
+        dx, dy = lane_drop(color)          # each colour has its own outfeed lane
+        place = (dx, dy, drop_z)
+        print(f"  sorting {color} at ({x:.2f}, {y:.2f}) -> {color} lane "
+              f"({dx:.2f}, {dy:.2f}) ...")
         t0 = time.time()
         ok = self.pick_place(pid, (x, y, PART_Z), place, self.transit_cfg,
                              hold_on_abort=lambda: not self.safe)
         if ok:
-            self._convey_away(pid, place)  # the belt carries the part down and off
+            self._convey_away(pid, place, color)  # its lane carries it out of the cell
             self.counts[color] += 1
             self.cycle_times.append(time.time() - t0)
             self.available.discard(color)
