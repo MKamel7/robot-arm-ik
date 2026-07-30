@@ -5,7 +5,7 @@ walks one common timeline at a fixed frame rate, and for each frame composes a
 four-panel view of the cell:
 
     PERCEPTION  |  GAZEBO DIGITAL TWIN  |  UR CONTROLLER  |  COLOUR SORTING CELL
-    RGB-D + the    the sim mirror of       the real teach     live OEE / safety
+    RGB-D + the    the sim mirror of       the real teach     live process +
     detector       the running cell        pendant (URSim)    telemetry
 
 Every stream is sampled by nearest-earlier timestamp, so streams running at
@@ -79,7 +79,7 @@ HARDWARE = {
         "title_sub": "Gazebo digital twin  ·  UR5e on URSim (RTDE)"
                      "  ·  ROS 2 Jazzy + MoveIt 2",
         "title_tags": "machine vision  |  real robot control"
-                      "  |  functional safety (ISO/TS 15066)  |  OEE telemetry",
+                      "  |  functional safety (ISO/TS 15066)  |  live process telemetry",
     },
     "mock": {
         "cell_sub": "UR5e  |  ros2_control + MoveIt  |  mock hardware",
@@ -92,7 +92,7 @@ HARDWARE = {
         "title_sub": "Gazebo digital twin  ·  UR5e on mock hardware"
                      "  ·  ROS 2 Jazzy + MoveIt 2",
         "title_tags": "machine vision  |  motion planning"
-                      "  |  functional safety (ISO/TS 15066)  |  OEE telemetry",
+                      "  |  functional safety (ISO/TS 15066)  |  live process telemetry",
     },
 }
 HW = HARDWARE["ursim"]

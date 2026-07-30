@@ -107,12 +107,16 @@ inactive so the launch re-activates it.
 Beyond the palletizing cell, the same arm runs a **colour-sorting cell** with the
 production-integration layers a factory needs:
 
-- **Colour sorting to a conveyor** (`color_sort`) with random part placement, a
-  3-button GUI (`sort_gui`) that validates orders (refuses double-orders and
-  absent colours), and a moving outfeed belt.
+- **Colour sorting to three outfeed lanes** (`color_sort`), one belt per colour,
+  fanned out radially from the robot so each colour leaves the cell in its own
+  direction. Random part placement, and a 3-button GUI (`sort_gui`) that
+  validates orders (refuses double-orders and absent colours).
 - **OPC UA fieldbus** (`opcua_server`, `opc.tcp://:4840/cell/`) so a PLC/SCADA
   commands sorts and reads live process values and the safety state.
-- **Live OEE dashboard** (`dashboard`, http://localhost:8080) with a safety banner.
+- **Live production dashboard** (`dashboard`, http://localhost:8080): parts sorted,
+  throughput, cycle time, per-colour counts and a safety banner, plus a `/control`
+  room view with the live robot. These are process metrics, not a true OEE figure
+  (no availability or quality factors).
 - **Functional safety** (`safety_supervisor`) — latched e-stop, guard interlock,
   speed-and-separation monitoring (ISO/TS 15066), watchdog, reset. See
   [`docs/SAFETY.md`](docs/SAFETY.md).
