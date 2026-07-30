@@ -17,7 +17,7 @@ import sys
 import time
 
 import rclpy
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from armik_moveit.palletizing import HOME, PART_SIZE, Palletizer
 from armik_moveit.scene import (
@@ -47,13 +47,36 @@ class ColorSorter(Palletizer):
         self.safety_state = "RUN"
         self.safety_reason = "ok"
         self.speed_scale = 1.0
+        # A part gripped through a safety stop is released by the operator's
+        # RESET / ON, which is what publishes /safety/reset.
+        self.release_pending = False
         self.create_subscription(String, "/target_color", self._on_color, 10)
         self.create_subscription(String, "/safety/state", self._on_safety, 10)
+        self.create_subscription(Bool, "/safety/reset", self._on_reset, 10)
         self.tele = self.create_publisher(String, "/cell/telemetry", 10)
         self.create_timer(1.0, self.publish_telemetry)
 
     def _on_color(self, msg):
         self.pending = msg.data.strip().lower()
+
+    def _on_reset(self, msg):
+        # Flag only: releasing drives the gripper and edits the planning scene,
+        # which the main loop does between cycles rather than in a callback.
+        if msg.data:
+            self.release_pending = True
+
+    def do_release(self):
+        """Let go of a part that a safety stop left in the gripper."""
+        self.release_pending = False
+        part_id = self.release_held()
+        if part_id is None:
+            return
+        self.alarm, self.alarm_msg = False, ""
+        self.state, self.current = "idle", ""
+        if not self.available:      # that part is gone; feed a fresh batch
+            self._random_batch()
+        self.publish_telemetry()
+        print(f"  reset: released {part_id} from the gripper")
 
     def _on_safety(self, msg):
         try:
@@ -74,6 +97,8 @@ class ColorSorter(Palletizer):
             "state": self.state,
             "current_color": self.current,
             "busy": self.state == "sorting",
+            # Part still in the gripper after a safety stop (empty when none).
+            "held": self.held_after_abort or "",
             "available": sorted(self.available),
             "parts_sorted": sorted_total,
             "counts": dict(self.counts),
@@ -161,7 +186,8 @@ class ColorSorter(Palletizer):
         place = (CONVEYOR_DROP[0], CONVEYOR_DROP[1], drop_z)
         print(f"  sorting {color} at ({x:.2f}, {y:.2f}) -> conveyor ...")
         t0 = time.time()
-        ok = self.pick_place(pid, (x, y, PART_Z), place, self.transit_cfg)
+        ok = self.pick_place(pid, (x, y, PART_Z), place, self.transit_cfg,
+                             hold_on_abort=lambda: not self.safe)
         if ok:
             self._convey_away(pid, place)  # the belt carries the part down and off
             self.counts[color] += 1
@@ -170,11 +196,21 @@ class ColorSorter(Palletizer):
             self.part_pos.pop(color, None)
             if not self.available:      # board empty -> feed a fresh random batch
                 self._random_batch()
+            self.state, self.current = "idle", ""
+        elif self.held_after_abort:
+            # Stopped mid-transfer: the part is still gripped and stays gripped.
+            # It is off the board, so it is no longer orderable, but it is not
+            # sorted either: it only clears when the operator resets.
+            self.available.discard(color)
+            self.part_pos.pop(color, None)
+            self.alarm = True
+            self.alarm_msg = f"safety stop holding {color}; RESET / ON to release"
+            self.state, self.current = "held", color
         else:
             self.alarm, self.alarm_msg = True, f"{color} pick-place failed"
-        self.state, self.current = "idle", ""
+            self.state, self.current = "idle", ""
         self.publish_telemetry()
-        print(f"  {color}: {'DONE' if ok else 'FAILED'}")
+        print(f"  {color}: {'DONE' if ok else 'HELD' if self.held_after_abort else 'FAILED'}")
 
 
 def main():
@@ -184,6 +220,8 @@ def main():
     try:
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.1)
+            if node.release_pending:
+                node.do_release()
             if node.pending:
                 color, node.pending = node.pending, None
                 node.sort(color)
