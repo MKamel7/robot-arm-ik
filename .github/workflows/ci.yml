@@ -37,7 +37,10 @@ jobs:
       - name: Install OS packages for headless MuJoCo rendering (osmesa)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libosmesa6-dev libgl1-mesa-glx libglfw3
+          # libgl1-mesa-glx was dropped in Ubuntu 24.04 and the hosted runner
+          # moved, which broke this build without a line of code changing.
+          # libgl1 plus libglx-mesa0 are the packages that replaced it.
+          sudo apt-get install -y libosmesa6-dev libgl1 libglx-mesa0 libglfw3
       - name: Install dependencies (dev + sim)
         run: uv sync --group dev --group sim
       - name: Headless MuJoCo render smoke test
