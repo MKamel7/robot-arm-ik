@@ -89,6 +89,12 @@ pick-and-place**, 4/4 with per-part grasp orientation.
 ## 6. Reproducing
 
 - Core + physics: `uv run --group sim python apps/palletizing_cell.py`
+
+The ROS 2 commands below run against the `armik_moveit` workspace, which lives
+in [moveit-ur5-pick-place](https://github.com/MKamel7/moveit-ur5-pick-place)
+rather than in this repository. It used to be duplicated here under `ros2/`,
+byte-identical, which is how a fix could land in one copy and not the other.
+
 - ROS 2 cell: `ros2 launch armik_moveit ur5e_gripper_moveit.launch.py` then
   `ros2 run armik_moveit palletize`
 - Perception: `ros2 launch armik_moveit perception_palletizing.launch.py` then

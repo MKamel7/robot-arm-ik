@@ -67,15 +67,15 @@ The UR5e and gripper models come from the [MuJoCo Menagerie](https://github.com/
 
 ## ROS 2 + MoveIt 2: industrial palletizing cell
 
-The same UR5e also runs on the framework industry actually deploys. Under [`ros2/`](ros2/) is a full **industrial palletizing cell** on **ROS 2 Jazzy + MoveIt 2**: a pedestal-mounted UR5e with a Robotiq 2F-85 gripper that picks colour-coded parts from a supply bin, routes over a divider wall, and stacks them onto a pallet.
+The same UR5e also runs on the framework industry actually deploys: a full **industrial palletizing cell** on **ROS 2 Jazzy + MoveIt 2**, a pedestal-mounted UR5e with a Robotiq 2F-85 gripper that picks colour-coded parts from a supply bin, routes over a divider wall, and stacks them onto a pallet.
 
-It is built the way a production cell is: **Pilz Industrial Motion Planner** `LIN` moves for the straight-down approach and retreat, **OMPL** for the obstacle-avoiding transfer, a **consistent top-down grasp** solved from one IK seed (no wonky wrist flips), attach-on-contact so parts follow the tool, a reachability pre-check, back-to-front filling, and printed production metrics. It places **4/4 at ~10 s/part**. A camera then closes the loop, **perception-driven bin picking** (RGB-D colour+depth detection feeds real grasp poses). The engineering write-up is in [`ros2/docs/ENGINEERING_PLAN.md`](ros2/docs/ENGINEERING_PLAN.md), a full [technical report](docs/TECHNICAL_REPORT.md) covers all four phases, and the setup/results are in [`ros2/README.md`](ros2/README.md).
+It is built the way a production cell is: **Pilz Industrial Motion Planner** `LIN` moves for the straight-down approach and retreat, **OMPL** for the obstacle-avoiding transfer, a **consistent top-down grasp** solved from one IK seed (no wonky wrist flips), attach-on-contact so parts follow the tool, a reachability pre-check, back-to-front filling, and printed production metrics. It places **4/4 at ~10 s/part**. A camera then closes the loop, **perception-driven bin picking** (RGB-D colour+depth detection feeds real grasp poses).
 
-```bash
-cd ros2 && colcon build --packages-select armik_moveit && source install/setup.bash
-ros2 launch armik_moveit ur5e_gripper_moveit.launch.py   # RViz
-ros2 run   armik_moveit palletize                        # run the cell
-```
+**The runnable workspace lives in [moveit-ur5-pick-place](https://github.com/MKamel7/moveit-ur5-pick-place), not here.** It used to be checked in under `ros2/` as well, byte-identical to the copy in that repository, which meant two copies of the same nodes drifting apart and a fix landing in one of them only. This repository keeps the engineering record and hands the code to the one place it is maintained:
+
+- [`ros2/docs/ENGINEERING_PLAN.md`](ros2/docs/ENGINEERING_PLAN.md) is the write-up, and [`ros2/docs/`](ros2/docs/) holds the phase verification records, [`SAFETY.md`](ros2/docs/SAFETY.md), [`HARDWARE.md`](ros2/docs/HARDWARE.md) and [`DEMO_VIDEO.md`](ros2/docs/DEMO_VIDEO.md).
+- The [technical report](docs/TECHNICAL_REPORT.md) covers all four phases.
+- To run the cell, follow the README in `moveit-ur5-pick-place`.
 
 ## Run it
 
