@@ -115,6 +115,14 @@ tests/
   test_ur5e.py           UR5e FK golden (vs MuJoCo), IK round-trip
 ```
 
+## Roadmap
+
+- **Choose a branch instead of returning all eight** — score the analytic solutions on joint travel from the previous configuration, singularity proximity and joint-limit margin. The difference between implementing the closed form and understanding why a controller needs one answer.
+- **Publish the benchmark plots** — iterations against pose, execution-time distribution, manipulability against convergence, condition number against residual, analytic runtime against DLS, success rate near singularities, branch continuity across a trajectory. `apps/benchmark_palletizing.py` already produces the data.
+- **Redundancy on a 7-DOF arm** — null-space control, joint-limit avoidance and manipulability maximisation on a Franka model, then compare joint interpolation, Cartesian interpolation, RRTConnect and CHOMP or STOMP on smoothness, clearance and compute time.
+
+Not doing: **no second ROS workspace here.** The duplicated one was removed and `moveit-ur5-pick-place` owns that story. This repository answers one question, whether the manipulator mathematics is understood.
+
 ## License
 
 MIT
