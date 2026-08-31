@@ -37,7 +37,7 @@ with a camera closing the loop.
   qfrc_bias`) tracks the planned trajectory under real MuJoCo dynamics; grasp is a
   weld equality constraint. Kinematic playback remains the default.
 
-Suite: 52 tests. A randomised-layout benchmark reports 100% success over 50
+Suite: 70 tests. A randomised-layout benchmark reports 100% success over 50
 layouts with ~0.093 mm placement residual (the IK solver's own error).
 
 ## 3. Industrial palletizing cell (Phase 2)

@@ -80,7 +80,7 @@ It is built the way a production cell is: **Pilz Industrial Motion Planner** `LI
 ## Run it
 
 ```bash
-uv run --group dev pytest                        # 24 tests: FK, Jacobian, IK, analytic IK, trajectory, UR5e
+uv run --group dev pytest                        # 70 tests: FK, Jacobian, IK, analytic IK, branch selection, trajectory, RRT, UR5e
 uv run --group dev python apps/pick_and_place.py --save   # matplotlib animation -> docs/pick_and_place.gif
 
 uv run --group sim python apps/palletizing_cell.py --save         # the palletizing cell GIF
