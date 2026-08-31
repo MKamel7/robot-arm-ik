@@ -15,6 +15,15 @@ WHY COLLECTION RATHER THAN A RUN. It is fast, it needs no threshold to be met,
 and the count is exactly what the documents claim. Collection does not execute
 tests, so this cannot recurse.
 
+THE COUNT DEPENDS ON THE ENVIRONMENT, which the first version of this file got
+wrong and CI caught. `test_palletizing_cell.py` and `test_ur5e_mujoco.py` are
+skipped at module level without the `sim` extras, so they are never collected:
+53 items on the plain `test` job against 70 with MuJoCo installed. A single
+documented number cannot be true in both, so the documents state the FULL
+suite and this gate only enforces where the full suite exists. The `mujoco-sim`
+job is where that is, which is the same job that already sets
+ARMIK_REQUIRE_MUJOCO=1 to stop the cross-validation quietly skipping.
+
 A number that is deliberately historical should not be written as "N tests" at
 all. Reword it instead of exempting it: an exemption is a second place for the
 truth to live.
@@ -44,11 +53,25 @@ def collected_tests() -> int:
     return int(found.group(1))
 
 
+def full_suite_available() -> bool:
+    """Is every test collectable here, or are the sim-only files skipped?"""
+    try:
+        import mujoco  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 @pytest.mark.parametrize("document", DOCUMENTS)
 def test_every_stated_test_count_is_the_real_one(document: str) -> None:
     path = ROOT / document
     if not path.is_file():
         pytest.skip(f"{document} is not in this repository")
+    if not full_suite_available():
+        pytest.skip(
+            "mujoco is absent, so the sim-only files are not collected and the "
+            "count here is not the one the documents state. The mujoco-sim CI "
+            "job enforces this.")
 
     actual = collected_tests()
     claimed = {int(n) for n in re.findall(r"(\d+)\s+tests\b",
