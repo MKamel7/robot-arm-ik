@@ -115,10 +115,37 @@ tests/
   test_ur5e.py           UR5e FK golden (vs MuJoCo), IK round-trip
 ```
 
+## Choosing one solution, and measuring whether it helps
+
+`analytical_ik` returns every closed-form solution for a pose, which is the right answer to a mathematical question and the wrong thing to hand a controller: a robot executes one configuration. `armik.select` scores the candidates on joint travel, singularity margin and joint-limit margin, and returns one.
+
+**The 2-pi problem is the part most implementations get wrong.** The closed form returns principal values in (-pi, pi]. A UR joint travels ±2pi, so for a joint at +3.0 rad a solution reported as -3.0 rad is the *same arm pose* reachable by moving 0.28 rad. Selecting on the principal value hands the controller a six-radian wrist unwind to reach a pose it was almost already in. Every candidate is shifted to the 2-pi equivalent nearest the current configuration, and the shifted configuration is what gets returned.
+
+![branch continuity](docs/ik_branch_continuity.png)
+
+Worst single joint step on each of 40 random 60-waypoint Cartesian paths (`apps/benchmark_ik.py`):
+
+| selector | worst step | median | paths with a jump over 1 rad |
+|---|---|---|---|
+| first branch returned | 6.28 rad | 0.139 | 11 of 40 |
+| chained, default weights | 3.21 rad | 0.050 | 6 of 40 |
+| chained, singularity guards off | **0.11 rad** | 0.050 | **0 of 40** |
+
+Chaining alone cuts the median step threefold and halves the discontinuous paths. **Every remaining jump is the singular floor doing its job**: disabling it removes all six, so the selector is not drifting between branches, it is refusing to track through a region where the arm loses a degree of freedom and paying a large joint move to leave. Which behaviour is correct depends on the machine, so both are reachable: `singular_floor=0.0` for pure continuity, the default to keep the refusal.
+
+**The first version of this cost was wrong, and the benchmark is what caught it.** The margin terms were reciprocals, so at the median manipulability of 1.6e-2 the singularity term contributed 0.6/0.016 = 37 against a travel term of order 0.05 for an adjacent waypoint. Travel was arithmetically irrelevant and the resulting path was *less* continuous than the naive selector, at 3.16 rad against 0.07. Both margins are now bounded penalties in [0, 1]. A cost whose terms are not commensurate is not a weighting, it is one term with decoration.
+
+## Solver benchmarks
+
+Every figure is generated from `docs/ik_benchmark.csv`, so a number in the report and a point on a plot cannot disagree.
+
+![iterations against conditioning](docs/ik_iterations_vs_condition.png)
+![success rate by manipulability](docs/ik_success_vs_manipulability.png)
+
+Over 600 random poses, seeded 0.6 rad away from the answer: **95% converge**, median 7 iterations and p95 92, p95 position error **0.099 mm**. The analytic solver returns all branches in a median 0.7 ms against 1.6 ms for damped least squares, and the interesting part is the tail rather than the median: DLS p95 is 44 ms, because a badly conditioned pose costs an order of magnitude more than a typical one. **Failure is not spread evenly**: it lives almost entirely in the lowest manipulability band, which is the argument for reporting the distribution rather than one success rate.
+
 ## Roadmap
 
-- **Choose a branch instead of returning all eight** — score the analytic solutions on joint travel from the previous configuration, singularity proximity and joint-limit margin. The difference between implementing the closed form and understanding why a controller needs one answer.
-- **Publish the benchmark plots** — iterations against pose, execution-time distribution, manipulability against convergence, condition number against residual, analytic runtime against DLS, success rate near singularities, branch continuity across a trajectory. `apps/benchmark_palletizing.py` already produces the data.
 - **Redundancy on a 7-DOF arm** — null-space control, joint-limit avoidance and manipulability maximisation on a Franka model, then compare joint interpolation, Cartesian interpolation, RRTConnect and CHOMP or STOMP on smoothness, clearance and compute time.
 
 Not doing: **no second ROS workspace here.** The duplicated one was removed and `moveit-ur5-pick-place` owns that story. This repository answers one question, whether the manipulator mathematics is understood.
