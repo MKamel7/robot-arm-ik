@@ -78,10 +78,16 @@ jobs:
           print(f"MuJoCo offscreen render OK: shape={pixels.shape}, dtype={pixels.dtype}")
           PY
       - name: Run test suite (with sim extras installed)
-        # Runs the full suite, not just a MuJoCo-specific file: today that's
-        # still just the 24 pure-NumPy tests, but this is what will pick up
-        # tests/test_palletizing_cell.py (Planner/build_plan, needs MuJoCo)
-        # once that lands, instead of silently no-opping.
+        # Runs the full suite, not just the MuJoCo-specific files, so
+        # tests/test_palletizing_cell.py and tests/test_ur5e_mujoco.py are
+        # picked up here rather than silently no-opping.
+        #
+        # ARMIK_REQUIRE_MUJOCO turns "mujoco is missing, so skip" into a
+        # failure. Everywhere else that skip is right. In the one job whose
+        # entire purpose is to install the sim extras, a skip would mean the
+        # FK cross-validation had quietly stopped running and the accuracy
+        # claim in the README was unchecked again.
         env:
           MUJOCO_GL: osmesa
+          ARMIK_REQUIRE_MUJOCO: "1"
         run: uv run pytest

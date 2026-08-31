@@ -22,7 +22,11 @@ UR5_DH = [
 # UR5e standard DH parameters. Same 6R topology as the UR5, but a taller base
 # (d1) and slightly different wrist offsets (d4, d5, d6). Cross-validated against
 # the MuJoCo Menagerie `universal_robots_ur5e` model: identity joint mapping,
-# tool position agrees to ~1 mm across random configurations.
+# tool position agrees to 1.5 mm worst case and 0.98 mm mean across random
+# configurations, orientation to 4e-6 degrees. Asserted in
+# tests/test_ur5e_mujoco.py, which loads the model and does the comparison.
+# The residual is the Menagerie XML rounding link lengths to the millimetre
+# against the datasheet values below, not an error in either model.
 UR5E_DH = [
     (0.0,      np.pi / 2, 0.1625),
     (-0.425,   0.0,       0.0),
@@ -64,8 +68,9 @@ class SerialArm:
     def ur5e(cls) -> "SerialArm":
         """The Universal Robots UR5e. Same solver and Jacobian, UR5e geometry.
 
-        Its FK is cross-validated against the MuJoCo Menagerie UR5e model, so the
-        joint angles this arm's IK produces drive that model directly.
+        Its FK is cross-validated against the MuJoCo Menagerie UR5e model to
+        1.5 mm worst case (tests/test_ur5e_mujoco.py), so the joint angles this
+        arm's IK produces drive that model directly.
         """
         return cls(dh=[list(link) for link in UR5E_DH],
                    joint_limits=UR5_JOINT_LIMITS.copy())

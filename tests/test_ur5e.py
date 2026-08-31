@@ -2,9 +2,12 @@
 
 The library was written for the UR5; the UR5e is the same 6R topology with a
 slightly taller base and different wrist offsets. These tests pin the UR5e
-forward kinematics (the fk(0) golden is cross-validated against the MuJoCo
-Menagerie `universal_robots_ur5e` model to ~1 mm) and confirm the existing IK
-solver works unchanged on the UR5e.
+forward kinematics against frozen values and confirm the existing IK solver
+works unchanged on the UR5e.
+
+The cross-validation against the MuJoCo Menagerie `universal_robots_ur5e`
+model lives in tests/test_ur5e_mujoco.py, which loads the model and does the
+comparison. Nothing in this file does, and this docstring used to imply it.
 """
 
 import numpy as np
@@ -20,7 +23,13 @@ def test_ur5e_constructor():
 
 
 def test_ur5e_fk_golden():
-    """fk(0) at the zero pose, cross-validated against the MuJoCo UR5e model."""
+    """fk(0) at the zero pose, pinned against regression.
+
+    This is a frozen constant at 1e-9, so it catches any change to the DH
+    table but says nothing on its own about whether the table is right. What
+    ties it to reality is test_ur5e_mujoco.py, which checks this same value
+    against where the MuJoCo model actually puts the flange.
+    """
     arm = SerialArm.ur5e()
     T = arm.fk(np.zeros(6))
     assert np.allclose(T[:3, 3], [-0.8172, -0.2329, 0.0628], atol=1e-9)
