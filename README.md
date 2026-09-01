@@ -201,7 +201,7 @@ which is the one thing the projector exists to prevent.
 
 ## Roadmap
 
-- **Redundancy on a 7-DOF arm** — null-space control, joint-limit avoidance and manipulability maximisation on a Franka model, then compare joint interpolation, Cartesian interpolation, RRTConnect and CHOMP or STOMP on smoothness, clearance and compute time.
+- **Compare planners on the 7-DOF arm** — joint interpolation, Cartesian interpolation, RRTConnect and CHOMP or STOMP on smoothness, clearance and compute time. The null-space control this needed is built and documented above; the comparison itself needs MoveIt, which is the only reason it is still here.
 
 Not doing: **no second ROS workspace here.** The duplicated one was removed and `moveit-ur5-pick-place` owns that story. This repository answers one question, whether the manipulator mathematics is understood.
 
