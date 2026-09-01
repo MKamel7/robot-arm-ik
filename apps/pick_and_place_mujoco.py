@@ -7,7 +7,8 @@ damped-least-squares IK solve each waypoint pose, and `joint_trajectory` builds
 the timed motion between them. MuJoCo only renders the result and animates the
 gripper -- the joint angles it displays are the ones this library computed. The
 UR5e FK is cross-validated against the MuJoCo Menagerie model (identity joint
-mapping, tool position agrees to ~1 mm), which is why the arm reaches the box.
+mapping, tool position agrees to 1.5 mm worst case, see tests/test_ur5e_mujoco.py),
+which is why the arm reaches the box.
 
 The gripper linkage's open and closed joint configurations are found once by
 settling the physics, then replayed kinematically; the box follows the grasp

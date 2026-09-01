@@ -6,7 +6,7 @@ Inverse kinematics and trajectory planning for a 6-DOF serial manipulator (the U
 
 ![UR5e palletizing cell in MuJoCo](docs/palletizing_cell.gif)
 
-*A UR5e palletizing cell, rendered in the [MuJoCo](https://mujoco.org) physics engine (`apps/palletizing_cell.py`): the robot transfers parts from a supply bin into a pallet grid with a Robotiq 2F-85 gripper, while a heads-up display reports the production metrics an automation engineer cares about (cycle time, throughput, placement accuracy). Every joint angle comes from this library: the UR5e forward kinematics is cross-validated against the MuJoCo model to ~1 mm, and the placement accuracy shown is the IK solver's own residual. A single pick-and-place (`apps/pick_and_place_mujoco.py`) and a dependency-light matplotlib version (`apps/pick_and_place.py`, below) also ship.*
+*A UR5e palletizing cell, rendered in the [MuJoCo](https://mujoco.org) physics engine (`apps/palletizing_cell.py`): the robot transfers parts from a supply bin into a pallet grid with a Robotiq 2F-85 gripper, while a heads-up display reports the production metrics an automation engineer cares about (cycle time, throughput, placement accuracy). Every joint angle comes from this library: the UR5e forward kinematics is cross-validated against the MuJoCo model in the test suite, and agrees to 1.5 mm worst case, and the placement accuracy shown is the IK solver's own residual. A single pick-and-place (`apps/pick_and_place_mujoco.py`) and a dependency-light matplotlib version (`apps/pick_and_place.py`, below) also ship.*
 
 ![pick and place animation](docs/pick_and_place.gif)
 
@@ -14,7 +14,7 @@ Inverse kinematics and trajectory planning for a 6-DOF serial manipulator (the U
 
 Four independent pieces, each a distinct capability:
 
-1. **Forward kinematics** (`src/armik/robot.py`). The arm is defined by standard Denavit-Hartenberg parameters (real, manufacturer-published numbers). `SerialArm.fk(q)` composes the per-link homogeneous transforms to give the tool pose for any joint configuration. Both `SerialArm.ur5()` (the default) and `SerialArm.ur5e()` are provided; the UR5e FK is cross-validated against the MuJoCo Menagerie model to ~1 mm with an identity joint mapping.
+1. **Forward kinematics** (`src/armik/robot.py`). The arm is defined by standard Denavit-Hartenberg parameters (real, manufacturer-published numbers). `SerialArm.fk(q)` composes the per-link homogeneous transforms to give the tool pose for any joint configuration. Both `SerialArm.ur5()` (the default) and `SerialArm.ur5e()` are provided; the UR5e FK is cross-validated against the MuJoCo Menagerie model with an identity joint mapping, in `tests/test_ur5e_mujoco.py`: position agrees to **1.5 mm worst case and 0.98 mm mean** over 5000 random configurations, orientation to 4e-6 degrees. The residual is not an error in either model, it is the Menagerie XML rounding the link lengths to the millimetre where the DH table uses the datasheet values to a tenth.
 
 2. **Geometric Jacobian** (`SerialArm.jacobian(q)`). Maps joint velocities to the tool's spatial velocity, `[v; omega] = J(q) q_dot`. Its conditioning reveals singular configurations. The test suite verifies the analytic Jacobian against a finite-difference of forward kinematics, and confirms that the UR5's home pose is genuinely singular (rank drops below 6).
 
@@ -67,20 +67,20 @@ The UR5e and gripper models come from the [MuJoCo Menagerie](https://github.com/
 
 ## ROS 2 + MoveIt 2: industrial palletizing cell
 
-The same UR5e also runs on the framework industry actually deploys. Under [`ros2/`](ros2/) is a full **industrial palletizing cell** on **ROS 2 Jazzy + MoveIt 2**: a pedestal-mounted UR5e with a Robotiq 2F-85 gripper that picks colour-coded parts from a supply bin, routes over a divider wall, and stacks them onto a pallet.
+The same UR5e also runs on the framework industry actually deploys: a full **industrial palletizing cell** on **ROS 2 Jazzy + MoveIt 2**, a pedestal-mounted UR5e with a Robotiq 2F-85 gripper that picks colour-coded parts from a supply bin, routes over a divider wall, and stacks them onto a pallet.
 
-It is built the way a production cell is: **Pilz Industrial Motion Planner** `LIN` moves for the straight-down approach and retreat, **OMPL** for the obstacle-avoiding transfer, a **consistent top-down grasp** solved from one IK seed (no wonky wrist flips), attach-on-contact so parts follow the tool, a reachability pre-check, back-to-front filling, and printed production metrics. It places **4/4 at ~10 s/part**. A camera then closes the loop, **perception-driven bin picking** (RGB-D colour+depth detection feeds real grasp poses). The engineering write-up is in [`ros2/docs/ENGINEERING_PLAN.md`](ros2/docs/ENGINEERING_PLAN.md), a full [technical report](docs/TECHNICAL_REPORT.md) covers all four phases, and the setup/results are in [`ros2/README.md`](ros2/README.md).
+It is built the way a production cell is: **Pilz Industrial Motion Planner** `LIN` moves for the straight-down approach and retreat, **OMPL** for the obstacle-avoiding transfer, a **consistent top-down grasp** solved from one IK seed (no wonky wrist flips), attach-on-contact so parts follow the tool, a reachability pre-check, back-to-front filling, and printed production metrics. It places **4/4 at ~10 s/part**. A camera then closes the loop, **perception-driven bin picking** (RGB-D colour+depth detection feeds real grasp poses).
 
-```bash
-cd ros2 && colcon build --packages-select armik_moveit && source install/setup.bash
-ros2 launch armik_moveit ur5e_gripper_moveit.launch.py   # RViz
-ros2 run   armik_moveit palletize                        # run the cell
-```
+**The runnable workspace lives in [moveit-ur5-pick-place](https://github.com/MKamel7/moveit-ur5-pick-place), not here.** It used to be checked in under `ros2/` as well, byte-identical to the copy in that repository, which meant two copies of the same nodes drifting apart and a fix landing in one of them only. This repository keeps the engineering record and hands the code to the one place it is maintained:
+
+- [`ros2/docs/ENGINEERING_PLAN.md`](ros2/docs/ENGINEERING_PLAN.md) is the write-up, and [`ros2/docs/`](ros2/docs/) holds the phase verification records, [`SAFETY.md`](ros2/docs/SAFETY.md), [`HARDWARE.md`](ros2/docs/HARDWARE.md) and [`DEMO_VIDEO.md`](ros2/docs/DEMO_VIDEO.md).
+- The [technical report](docs/TECHNICAL_REPORT.md) covers all four phases.
+- To run the cell, follow the README in `moveit-ur5-pick-place`.
 
 ## Run it
 
 ```bash
-uv run --group dev pytest                        # 24 tests: FK, Jacobian, IK, analytic IK, trajectory, UR5e
+uv run --group dev pytest                        # 95 tests with the sim extras, 77 without
 uv run --group dev python apps/pick_and_place.py --save   # matplotlib animation -> docs/pick_and_place.gif
 
 uv run --group sim python apps/palletizing_cell.py --save         # the palletizing cell GIF
@@ -114,6 +114,96 @@ tests/
   test_trajectory.py     boundary conditions, velocity limits, synchronisation
   test_ur5e.py           UR5e FK golden (vs MuJoCo), IK round-trip
 ```
+
+## Choosing one solution, and measuring whether it helps
+
+`analytical_ik` returns every closed-form solution for a pose, which is the right answer to a mathematical question and the wrong thing to hand a controller: a robot executes one configuration. `armik.select` scores the candidates on joint travel, singularity margin and joint-limit margin, and returns one.
+
+**The 2-pi problem is the part most implementations get wrong.** The closed form returns principal values in (-pi, pi]. A UR joint travels ±2pi, so for a joint at +3.0 rad a solution reported as -3.0 rad is the *same arm pose* reachable by moving 0.28 rad. Selecting on the principal value hands the controller a six-radian wrist unwind to reach a pose it was almost already in. Every candidate is shifted to the 2-pi equivalent nearest the current configuration, and the shifted configuration is what gets returned.
+
+![branch continuity](docs/ik_branch_continuity.png)
+
+Worst single joint step on each of 40 random 60-waypoint Cartesian paths (`apps/benchmark_ik.py`):
+
+| selector | worst step | median | paths with a jump over 1 rad |
+|---|---|---|---|
+| first branch returned | 6.28 rad | 0.139 | 11 of 40 |
+| chained, default weights | 3.21 rad | 0.050 | 6 of 40 |
+| chained, singularity guards off | **0.11 rad** | 0.050 | **0 of 40** |
+
+Chaining alone cuts the median step threefold and halves the discontinuous paths. **Every remaining jump is the singular floor doing its job**: disabling it removes all six, so the selector is not drifting between branches, it is refusing to track through a region where the arm loses a degree of freedom and paying a large joint move to leave. Which behaviour is correct depends on the machine, so both are reachable: `singular_floor=0.0` for pure continuity, the default to keep the refusal.
+
+**The first version of this cost was wrong, and the benchmark is what caught it.** The margin terms were reciprocals, so at the median manipulability of 1.6e-2 the singularity term contributed 0.6/0.016 = 37 against a travel term of order 0.05 for an adjacent waypoint. Travel was arithmetically irrelevant and the resulting path was *less* continuous than the naive selector, at 3.16 rad against 0.07. Both margins are now bounded penalties in [0, 1]. A cost whose terms are not commensurate is not a weighting, it is one term with decoration.
+
+## Solver benchmarks
+
+Every figure is generated from `docs/ik_benchmark.csv`, so a number in the report and a point on a plot cannot disagree.
+
+![iterations against conditioning](docs/ik_iterations_vs_condition.png)
+![success rate by manipulability](docs/ik_success_vs_manipulability.png)
+
+Over 600 random poses, seeded 0.6 rad away from the answer: **95% converge**, median 7 iterations and p95 92, p95 position error **0.099 mm**. The analytic solver returns all branches in a median 0.7 ms against 1.6 ms for damped least squares, and the interesting part is the tail rather than the median: DLS p95 is 44 ms, because a badly conditioned pose costs an order of magnitude more than a typical one. **Failure is not spread evenly**: it lives almost entirely in the lowest manipulability band, which is the argument for reporting the distribution rather than one success rate.
+
+## Redundancy: a seventh joint, and what to do with it
+
+A pose is six numbers. A 6R arm reaches it in a finite set of configurations,
+and the section above picks between them. A **7R arm has a continuum**: at every
+non-singular configuration there is a one-dimensional family of joint velocities
+that move the joints and leave the tool exactly where it is. `armik.redundancy`
+spends that freedom on a secondary objective:
+
+    qdot = J+ v  +  (I - J+ J) z
+
+`SerialArm.panda()` is the arm, in **modified (Craig) DH** because that is the
+convention Franka publishes. The transcription is checked against two things
+outside this repository: the flange at the standard ready pose lands within a
+millimetre of the published [0.307, 0, 0.590], and the sampled reach from the
+shoulder is 0.858 m against a published 0.855 m.
+
+### What it buys, measured
+
+From `apps/benchmark_redundancy.py`, over a 60-step Cartesian drag that walks the
+arm toward its limits. Full sweep in `docs/redundancy_benchmark.csv`.
+
+| | worst joint-limit margin | mean manipulability |
+|---|---|---|
+| no null-space control | 0.088 | 0.0561 |
+| limit avoidance, gain 5 | **0.192** | 0.0320 |
+| manipulability, gain 0.2 | 0.063 | **0.0571** |
+
+**The two objectives genuinely conflict.** Doubling the limit margin costs 43% of
+the manipulability, and buying 1.7% more manipulability costs 29% of the margin.
+Neither is free, `compare()` returns both traces rather than a verdict, and which
+trade is right is a decision about a robot and a task.
+
+### Both objectives are worse than nothing past their optimal gain
+
+![limit avoidance gain sweep](docs/redundancy_limit_gain.png)
+
+The controller integrates in discrete steps, so a large null-space step
+overshoots the hill it is climbing. Limit avoidance peaks at gain 5 and decays
+above it; **at gain 300 the controller whose entire purpose is staying off the
+stops puts a joint on one.** Tests assert both of those, because the finding is
+more useful than the tuned number.
+
+Task error stays below 4.3e-4 across every gain, which is the check that the
+null-space term really is free.
+
+### A bug worth recording
+
+The first version built the projector from the **damped** inverse, the same one
+the task term uses. Its own tests caught it: on a full-rank 6R arm the projector
+should be exactly zero and was not, and null-space motion on the Panda moved the
+tool. Damping is a deliberate approximation that belongs in the task term, where
+trading a little accuracy for a bounded command near a singularity is the point.
+Putting it in the projector leaks secondary motion straight into task error,
+which is the one thing the projector exists to prevent.
+
+## Roadmap
+
+- **Redundancy on a 7-DOF arm** — null-space control, joint-limit avoidance and manipulability maximisation on a Franka model, then compare joint interpolation, Cartesian interpolation, RRTConnect and CHOMP or STOMP on smoothness, clearance and compute time.
+
+Not doing: **no second ROS workspace here.** The duplicated one was removed and `moveit-ur5-pick-place` owns that story. This repository answers one question, whether the manipulator mathematics is understood.
 
 ## License
 

@@ -21,7 +21,10 @@ with a camera closing the loop.
 ## 2. Kinematics core (Phase 0/1)
 
 - **Forward kinematics** from standard Denavit-Hartenberg parameters; the UR5e FK
-  is cross-validated against the MuJoCo Menagerie model to ~1 mm.
+  is cross-validated against the MuJoCo Menagerie model in `tests/test_ur5e_mujoco.py`,
+  agreeing to 1.5 mm worst case and 0.98 mm mean over 5000 random configurations,
+  with orientation to 4e-6 degrees. The residual is the Menagerie XML's
+  millimetre-rounded link lengths, not an error in either model.
 - **Inverse kinematics** two ways: a damped-least-squares numerical solver
   (`dq = J^T (J J^T + lambda^2 I)^-1 e`) that stays stable through singularities,
   and a closed-form analytic solver returning all eight branches. Over 2000 random
@@ -34,7 +37,7 @@ with a camera closing the loop.
   qfrc_bias`) tracks the planned trajectory under real MuJoCo dynamics; grasp is a
   weld equality constraint. Kinematic playback remains the default.
 
-Suite: 46 tests. A randomised-layout benchmark reports 100% success over 50
+Suite: 95 tests with the `sim` extras installed (77 without, since the MuJoCo files are skipped at module level). A randomised-layout benchmark reports 100% success over 50
 layouts with ~0.093 mm placement residual (the IK solver's own error).
 
 ## 3. Industrial palletizing cell (Phase 2)
@@ -89,6 +92,12 @@ pick-and-place**, 4/4 with per-part grasp orientation.
 ## 6. Reproducing
 
 - Core + physics: `uv run --group sim python apps/palletizing_cell.py`
+
+The ROS 2 commands below run against the `armik_moveit` workspace, which lives
+in [moveit-ur5-pick-place](https://github.com/MKamel7/moveit-ur5-pick-place)
+rather than in this repository. It used to be duplicated here under `ros2/`,
+byte-identical, which is how a fix could land in one copy and not the other.
+
 - ROS 2 cell: `ros2 launch armik_moveit ur5e_gripper_moveit.launch.py` then
   `ros2 run armik_moveit palletize`
 - Perception: `ros2 launch armik_moveit perception_palletizing.launch.py` then
