@@ -80,7 +80,7 @@ It is built the way a production cell is: **Pilz Industrial Motion Planner** `LI
 ## Run it
 
 ```bash
-uv run --group dev pytest                        # 70 tests with the sim extras, 53 without
+uv run --group dev pytest                        # 95 tests with the sim extras, 77 without
 uv run --group dev python apps/pick_and_place.py --save   # matplotlib animation -> docs/pick_and_place.gif
 
 uv run --group sim python apps/palletizing_cell.py --save         # the palletizing cell GIF
@@ -143,6 +143,61 @@ Every figure is generated from `docs/ik_benchmark.csv`, so a number in the repor
 ![success rate by manipulability](docs/ik_success_vs_manipulability.png)
 
 Over 600 random poses, seeded 0.6 rad away from the answer: **95% converge**, median 7 iterations and p95 92, p95 position error **0.099 mm**. The analytic solver returns all branches in a median 0.7 ms against 1.6 ms for damped least squares, and the interesting part is the tail rather than the median: DLS p95 is 44 ms, because a badly conditioned pose costs an order of magnitude more than a typical one. **Failure is not spread evenly**: it lives almost entirely in the lowest manipulability band, which is the argument for reporting the distribution rather than one success rate.
+
+## Redundancy: a seventh joint, and what to do with it
+
+A pose is six numbers. A 6R arm reaches it in a finite set of configurations,
+and the section above picks between them. A **7R arm has a continuum**: at every
+non-singular configuration there is a one-dimensional family of joint velocities
+that move the joints and leave the tool exactly where it is. `armik.redundancy`
+spends that freedom on a secondary objective:
+
+    qdot = J+ v  +  (I - J+ J) z
+
+`SerialArm.panda()` is the arm, in **modified (Craig) DH** because that is the
+convention Franka publishes. The transcription is checked against two things
+outside this repository: the flange at the standard ready pose lands within a
+millimetre of the published [0.307, 0, 0.590], and the sampled reach from the
+shoulder is 0.858 m against a published 0.855 m.
+
+### What it buys, measured
+
+From `apps/benchmark_redundancy.py`, over a 60-step Cartesian drag that walks the
+arm toward its limits. Full sweep in `docs/redundancy_benchmark.csv`.
+
+| | worst joint-limit margin | mean manipulability |
+|---|---|---|
+| no null-space control | 0.088 | 0.0561 |
+| limit avoidance, gain 5 | **0.192** | 0.0320 |
+| manipulability, gain 0.2 | 0.063 | **0.0571** |
+
+**The two objectives genuinely conflict.** Doubling the limit margin costs 43% of
+the manipulability, and buying 1.7% more manipulability costs 29% of the margin.
+Neither is free, `compare()` returns both traces rather than a verdict, and which
+trade is right is a decision about a robot and a task.
+
+### Both objectives are worse than nothing past their optimal gain
+
+![limit avoidance gain sweep](docs/redundancy_limit_gain.png)
+
+The controller integrates in discrete steps, so a large null-space step
+overshoots the hill it is climbing. Limit avoidance peaks at gain 5 and decays
+above it; **at gain 300 the controller whose entire purpose is staying off the
+stops puts a joint on one.** Tests assert both of those, because the finding is
+more useful than the tuned number.
+
+Task error stays below 4.3e-4 across every gain, which is the check that the
+null-space term really is free.
+
+### A bug worth recording
+
+The first version built the projector from the **damped** inverse, the same one
+the task term uses. Its own tests caught it: on a full-rank 6R arm the projector
+should be exactly zero and was not, and null-space motion on the Panda moved the
+tool. Damping is a deliberate approximation that belongs in the task term, where
+trading a little accuracy for a bounded command near a singularity is the point.
+Putting it in the projector leaks secondary motion straight into task error,
+which is the one thing the projector exists to prevent.
 
 ## Roadmap
 

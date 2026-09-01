@@ -52,12 +52,76 @@ def dh_transform(a: float, alpha: float, d: float, theta: float) -> np.ndarray:
     ])
 
 
+def dh_transform_modified(a: float, alpha: float, d: float,
+                          theta: float) -> np.ndarray:
+    """Modified (Craig) Denavit-Hartenberg transform for one link.
+
+    NOT interchangeable with `dh_transform` above, and mixing them silently
+    produces a plausible-looking arm with the wrong geometry. The difference is
+    where the link twist is applied: standard DH rotates about x AFTER
+    translating along z, Craig rotates about x FIRST. A parameter table is only
+    meaningful together with the convention it was written for.
+
+    This exists because Franka Emika publishes the Panda's parameters in Craig
+    form, and retyping them into a standard-DH transform would be the exact
+    mistake this docstring is warning about.
+    """
+    ct, st = np.cos(theta), np.sin(theta)
+    ca, sa = np.cos(alpha), np.sin(alpha)
+    return np.array([
+        [ct,      -st,       0.0,       a],
+        [st * ca,  ct * ca, -sa, -d * sa],
+        [st * sa,  ct * sa,  ca,  d * ca],
+        [0.0,      0.0,      0.0,     1.0],
+    ])
+
+
+# Franka Emika Panda, 7R, in MODIFIED (Craig) DH as the manufacturer publishes
+# it: (a, alpha, d) per joint. The flange offset is folded into the last link's
+# d, so `fk` returns the flange rather than joint 7's frame.
+#
+# NOT CROSS-VALIDATED against an external model, unlike the UR5e. There is no
+# Franka asset vendored here, so this geometry rests on the published table
+# rather than on agreement with a simulator, and that is a weaker footing. The
+# UR5e's 1.5 mm agreement with MuJoCo is a measurement; this is a transcription.
+# Said here rather than left for a reader to assume otherwise.
+PANDA_DH = [
+    (0.0,     0.0,        0.333),
+    (0.0,    -np.pi / 2,  0.0),
+    (0.0,     np.pi / 2,  0.316),
+    (0.0825,  np.pi / 2,  0.0),
+    (-0.0825, -np.pi / 2, 0.384),
+    (0.0,     np.pi / 2,  0.0),
+    (0.088,   np.pi / 2,  0.107),
+]
+
+# The Panda's real limits, and they matter for redundancy rather than being
+# decoration: joints 4 and 6 are ASYMMETRIC about zero, so a null-space
+# controller that pushes every joint toward the midpoint of its range moves
+# them somewhere a symmetric arm would not need to go. A test asserts the
+# asymmetry survives, because replacing these with a tidy plus-or-minus band
+# would quietly delete the interesting half of the problem.
+PANDA_JOINT_LIMITS = np.array([
+    [-2.8973, 2.8973],
+    [-1.7628, 1.7628],
+    [-2.8973, 2.8973],
+    [-3.0718, -0.0698],
+    [-2.8973, 2.8973],
+    [-0.0175, 3.7525],
+    [-2.8973, 2.8973],
+])
+
+
 @dataclass
 class SerialArm:
     """A revolute serial manipulator defined by DH parameters."""
 
     dh: list = field(default_factory=lambda: list(UR5_DH))
     joint_limits: np.ndarray = field(default_factory=lambda: UR5_JOINT_LIMITS.copy())
+    #: Which DH convention `dh` is written in. Carried on the arm rather than
+    #: passed at call time so a parameter table cannot be separated from the
+    #: transform that makes sense of it.
+    modified_dh: bool = False
 
     @classmethod
     def ur5(cls) -> "SerialArm":
@@ -75,6 +139,22 @@ class SerialArm:
         return cls(dh=[list(link) for link in UR5E_DH],
                    joint_limits=UR5_JOINT_LIMITS.copy())
 
+    @classmethod
+    def panda(cls) -> "SerialArm":
+        """The Franka Emika Panda: 7R, and therefore REDUNDANT.
+
+        Seven joints against a six-dimensional task leaves a one-dimensional
+        null space at every non-singular configuration, which is the whole
+        reason this arm is here. `armik.redundancy` uses it to do something
+        useful with that freedom; on the 6R arms there is nothing to use.
+
+        Its geometry is transcribed from the published Craig-form table and is
+        NOT cross-validated against a simulator, unlike `ur5e()`. See PANDA_DH.
+        """
+        return cls(dh=[list(link) for link in PANDA_DH],
+                   joint_limits=PANDA_JOINT_LIMITS.copy(),
+                   modified_dh=True)
+
     @property
     def n(self) -> int:
         return len(self.dh)
@@ -84,10 +164,11 @@ class SerialArm:
 
         Length n+1: T0_0 is the base (identity), T0_n is the end-effector.
         """
+        transform = dh_transform_modified if self.modified_dh else dh_transform
         T = np.eye(4)
         out = [T]
         for (a, alpha, d), theta in zip(self.dh, q):
-            T = T @ dh_transform(a, alpha, d, theta)
+            T = T @ transform(a, alpha, d, theta)
             out.append(T)
         return out
 

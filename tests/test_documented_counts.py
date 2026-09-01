@@ -53,6 +53,23 @@ def collected_tests() -> int:
     return int(found.group(1))
 
 
+#: The two files skipped at module level when mujoco is absent. Named here so
+#: the without-sim figure is DERIVED rather than remembered.
+SIM_ONLY = ("tests/test_palletizing_cell.py", "tests/test_ur5e_mujoco.py")
+
+
+def sim_only_tests() -> int:
+    """How many tests disappear when the sim extras are not installed."""
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q",
+         "-p", "no:cacheprovider", *SIM_ONLY],
+        cwd=ROOT, capture_output=True, text=True, check=False)
+    found = re.search(r"^(\d+) tests collected", result.stdout, re.M)
+    assert found is not None, (
+        f"could not count the sim-only files:\n{result.stdout[-1500:]}")
+    return int(found.group(1))
+
+
 def full_suite_available() -> bool:
     """Is every test collectable here, or are the sim-only files skipped?"""
     try:
@@ -74,13 +91,23 @@ def test_every_stated_test_count_is_the_real_one(document: str) -> None:
             "job enforces this.")
 
     actual = collected_tests()
-    claimed = {int(n) for n in re.findall(r"(\d+)\s+tests\b",
-                                          path.read_text(encoding="utf-8"))}
+    text = path.read_text(encoding="utf-8")
+    claimed = {int(n) for n in re.findall(r"(\d+)\s+tests\b", text)}
 
     wrong = sorted(n for n in claimed if n != actual)
     assert not wrong, (
         f"{document} says {wrong} tests; the suite collects {actual}. "
         f"Update the document, or reword the claim if it is historical.")
+
+    # The other half of the same sentence, which the check above cannot see:
+    # "70 tests with the sim extras, 53 without" puts no "tests" after the
+    # second number, so it was never gated and had drifted to a real 77.
+    without = sorted({int(n) for n in re.findall(r"(\d+)\s+without\b", text)})
+    if without:
+        expected = actual - sim_only_tests()
+        assert without == [expected], (
+            f"{document} says {without} without the sim extras; the plain "
+            f"suite collects {expected}.")
 
 
 def test_the_documents_state_the_count_at_all() -> None:
