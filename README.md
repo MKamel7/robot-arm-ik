@@ -80,7 +80,7 @@ It is built the way a production cell is: **Pilz Industrial Motion Planner** `LI
 ## Run it
 
 ```bash
-uv run --group dev pytest                        # 95 tests with the sim extras, 77 without
+uv run --group dev pytest                        # 111 tests with the sim extras, 93 without
 uv run --group dev python apps/pick_and_place.py --save   # matplotlib animation -> docs/pick_and_place.gif
 
 uv run --group sim python apps/palletizing_cell.py --save         # the palletizing cell GIF
@@ -199,9 +199,95 @@ trading a little accuracy for a bounded command near a singularity is the point.
 Putting it in the projector leaks secondary motion straight into task error,
 which is the one thing the projector exists to prevent.
 
+## Planners: the ones here against the ones people ship
+
+Three of the four planner families below are implemented in this repository.
+The comparison is not "which planner is best", it is whether a hand-written
+implementation does the same thing as the production one, measured on identical
+problems in an identical collision world.
+
+`apps/benchmark_planners.py` runs it against a sourced ROS 2 Jazzy with MoveIt.
+It is a script and not a package: the duplicated colcon workspace was removed
+from this repository deliberately, and nothing here brings one back. 20 seeded
+start and goal pairs on the
+Panda, each one chosen so a straight joint-space line between them is blocked
+by a shelf. Full sweep in `docs/planner_comparison.csv`, drawn by
+`apps/plot_planner_comparison.py`.
+
+**The two models are the same robot, and that is checked rather than assumed.**
+`SerialArm.panda()` is a Craig-form DH transcription and MoveIt plans on the
+published URDF. `tests/test_panda_model_agreement.py` compares the flange pose
+over 200 random configurations inside the joint limits: worst disagreement
+below 1e-6 m and 1e-6 in every rotation entry.
+
+| planner | written by | solved | collision free | median s | joint travel | smoothness | clearance |
+|---|---|---|---|---|---|---|---|
+| joint interpolation | this repo | 20/20 | **0** | 0.000 | 4.96 | straight | n/a |
+| Pilz PTP | MoveIt | 20/20 | **0** | 0.000 | 4.96 | straight | n/a |
+| Cartesian interpolation | this repo | 0/20 | 0 | 1.71 | n/a | n/a | n/a |
+| Pilz LIN | MoveIt | 1/20 | 0 | 0.001 | 2.44 | 5.8e-07 | n/a |
+| RRT-Connect | this repo | **20/20** | **20** | 0.055 | 6.26 | 2.2e-05 | 0.086 |
+| OMPL RRTConnect | MoveIt | 16/20 | 13 | 0.019 | 6.68 | 2.3e-05 | 0.111 |
+| CHOMP | MoveIt | 14/20 | 14 | 0.408 | 5.22 | 3.0e-06 | 0.096 |
+| STOMP | MoveIt | 13/20 | 13 | 0.258 | 5.01 | 3.2e-07 | 0.102 |
+
+Medians over the problems each planner solved. Joint travel is radians summed
+over the arm, clearance is metres to the shelf, smoothness is the mean squared
+second difference of the path after resampling to equal arc length, so a
+planner cannot score better by returning fewer waypoints.
+
+**Time is not comparable across the two groups and the table should not be read
+that way.** This repository's planners are NumPy and MoveIt's are C++. Path
+length, shape and clearance do not care what wrote them; seconds do.
+
+### What the numbers say
+
+**The two joint interpolations are the same function.** Not similar: the path
+lengths agree to four decimals on every one of the 20 problems (6.1724, 4.5935,
+8.2930, and so on). Both also produce a colliding path on all 20, which is
+correct behaviour for a primitive that does not take a collision world as an
+argument, and is the reason planners exist.
+
+**A straight line for the tool is usually not available.** Cartesian
+interpolation solved none of the 20 and Pilz LIN solved one, for different
+reasons: this repository's version fails when IK stops converging along the
+line, and LIN refuses when the joint acceleration limit would be violated.
+Neither is a defect. A straight tool path between two arbitrary reachable
+configurations leaves the reachable set almost immediately.
+
+**Optimisers buy smoothness, not clearance.** STOMP's paths are about 70 times
+smoother than either sampling planner and CHOMP's about 7 times, while the
+clearance of all four is within 3 cm of each other. They pay 5 to 20 times the
+compute time for it, and they solve fewer problems: an optimiser initialised
+with a straight line that is deep in collision has a poor starting point.
+
+### The finding worth the run: OMPL returned paths with collisions in them
+
+**Six of 52 OMPL paths across three repeats contain a collision**, and none of
+them collide at OMPL's own waypoints. Checked at 400 samples along the path, 2
+to 4 samples are inside the shelf; checked at the waypoints, zero are. The
+collisions are strictly between waypoints.
+
+That is the textbook tunnelling case rather than a defect in OMPL. The shelf
+here is 30 mm thick, and `moveit_resources_panda_moveit_config` does not set
+`longest_valid_segment_fraction`, so the segment check runs at the MoveIt
+default. This repository's `rrt.py` checks every segment at `step_size / 2`,
+which is 0.05 rad, and its docstring gives that as the reason: "so a thin
+obstacle can't be tunnelled through between samples". The measurement says the
+docstring is right, and says nothing at all about the quality of OMPL, which
+would find these collisions too if it were asked at a finer resolution.
+
+**So the 20/20 in the table is not a claim that this repository's RRT-Connect
+beats OMPL's.** It solves more of these problems and validates all of them, at
+three times the compute cost per solve and with a finer collision check. Those
+are the trade-offs, not a ranking.
+
+![planner comparison](docs/planner_comparison.png)
+
 ## Roadmap
 
-- **Compare planners on the 7-DOF arm** — joint interpolation, Cartesian interpolation, RRTConnect and CHOMP or STOMP on smoothness, clearance and compute time. The null-space control this needed is built and documented above; the comparison itself needs MoveIt, which is the only reason it is still here.
+- **Set `longest_valid_segment_fraction` and re-run the comparison.** The planner table above found six of 52 OMPL paths carrying a collision strictly between waypoints, against 30 mm obstacles, at the MoveIt default. The fix is one parameter and the measurement to check it against already exists, which makes this the cheapest real experiment left here.
+- **Give the optimisers a better initial guess.** CHOMP and STOMP solved 14 and 13 of 20 while both sampling planners solved more, and an optimiser handed a straight line that is deep in collision is being asked to start from the worst possible place. Seeding them from an RRT-Connect path would separate "the optimiser is weak" from "the initialisation was".
 
 Not doing: **no second ROS workspace here.** The duplicated one was removed and `moveit-ur5-pick-place` owns that story. This repository answers one question, whether the manipulator mathematics is understood.
 
