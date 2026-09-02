@@ -14,4 +14,12 @@ sim = ["mujoco>=3.10", "imageio>=2.30", "imageio-ffmpeg>=0.5", "pillow>=10"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-ra"
+# `-p no:launch_ros -p no:launch_testing`: this box sources ROS 2 in ~/.bashrc,
+# which puts /opt/ros/jazzy on PYTHONPATH for every shell. pytest then
+# auto-loads the pytest plugins ROS ships, they import `launch`, `launch`
+# imports `yaml`, and `yaml` is not in this project's environment, so
+# `uv run pytest` died before collecting a single test. The tests themselves
+# are pure NumPy and have nothing to do with ROS. Disabling the two plugins by
+# their entry point names costs nothing where ROS is absent, since `-p no:` on
+# a plugin that was never installed is a no-op, so CI is unaffected.
+addopts = "-ra -p no:launch_ros -p no:launch_testing"

@@ -18,8 +18,18 @@ import pytest
 
 from armik.robot import SerialArm
 
-pytest.importorskip("moveit.core.robot_model",
-                    reason="needs a sourced ROS 2 Jazzy with moveit_py")
+try:
+    import moveit.core.robot_model  # noqa: F401
+except Exception as exc:  # noqa: BLE001
+    # Deliberately broader than ImportError. In a ROS-sourced shell the project
+    # venv can SEE moveit without being able to import it, because the ROS
+    # dependencies are not installed here, and what that produces is
+    # "ImportError: initialization failed" out of a C extension rather than a
+    # clean ModuleNotFoundError. `importorskip` does not catch that, so the
+    # whole suite errored on this one file in exactly the shell this box gives
+    # you by default.
+    pytest.skip(f"needs a sourced ROS 2 Jazzy with moveit_py ({type(exc).__name__})",
+                allow_module_level=True)
 
 READY = np.array([0.0, -np.pi / 4, 0.0, -3 * np.pi / 4, 0.0, np.pi / 2, np.pi / 4])
 TIP = "panda_link8"
