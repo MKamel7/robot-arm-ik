@@ -51,7 +51,7 @@ def rows():
 def table():
     """The README's planner table, as {label: [cells]}."""
     text = README.read_text(encoding="utf-8")
-    section = re.search(r"## Planners: the ones here against the ones people ship(.*?)\n## ",
+    section = re.search(r"## [^\n]*Planners: the ones here against the ones people ship(.*?)\n## ",
                         text, re.S)
     assert section, "the README has no planner comparison section"
     parsed = {}
