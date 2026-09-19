@@ -1,6 +1,9 @@
 # Robot Arm IK
 
 [![CI](https://github.com/MKamel7/robot-arm-ik/actions/workflows/ci.yml/badge.svg)](https://github.com/MKamel7/robot-arm-ik/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/Python-3.12-blue)](https://www.python.org)
+[![Robot](https://img.shields.io/badge/robot-UR5%20%2F%20UR5e-orange)](https://www.universal-robots.com)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
 Inverse kinematics and trajectory planning for a 6-DOF serial manipulator (the Universal Robots UR5/UR5e), written from the kinematics up in NumPy. Given a target pose for the tool, the planner finds the joint angles that reach it, plans a smooth timed motion to get there, and animates the whole thing in 3D.
 
@@ -10,7 +13,7 @@ Inverse kinematics and trajectory planning for a 6-DOF serial manipulator (the U
 
 ![pick and place animation](docs/pick_and_place.gif)
 
-## What it does
+## ⚙️ What it does
 
 Four independent pieces, each a distinct capability:
 
@@ -32,7 +35,7 @@ Four independent pieces, each a distinct capability:
 
 The pick-and-place demo (`apps/pick_and_place.py`) ties it together: reach to a pick location, grasp, carry, release, and return home, with the gripper state shown on the tool tip.
 
-## Architecture
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
@@ -56,7 +59,7 @@ flowchart LR
 
 armik never touches MuJoCo directly: it solves poses and timing in plain NumPy, and the Planner is the only place that queries MuJoCo (contact checks for re-routing, forward kinematics for reachability) before handing the resulting joint path to the scene for rendering. *Scene parameters (table height, grid layout, home pose, and the like) are being consolidated out of inline constants into a single scene config, so the same Planner/scene pipeline can be re-targeted without editing code.*
 
-## Photoreal demos (MuJoCo)
+## 🎬 Photoreal demos (MuJoCo)
 
 Two optional demos render the kinematics in the [MuJoCo](https://mujoco.org) physics engine with a real UR5e and a Robotiq 2F-85 gripper. In both, armik does all the kinematics (`SerialArm.ur5e()` forward kinematics + damped-least-squares IK solve each waypoint, `joint_trajectory` builds the timed motion) and MuJoCo only renders the result and animates the gripper.
 
@@ -65,7 +68,7 @@ Two optional demos render the kinematics in the [MuJoCo](https://mujoco.org) phy
 
 The UR5e and gripper models come from the [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie), vendored under `assets/` with their licenses (see `assets/ATTRIBUTION.md`). These are optional extras, so the core library stays pure-NumPy.
 
-## ROS 2 + MoveIt 2: industrial palletizing cell
+## 📦 ROS 2 and MoveIt 2: industrial palletizing cell
 
 The same UR5e also runs on the framework industry actually deploys: a full **industrial palletizing cell** on **ROS 2 Jazzy + MoveIt 2**, a pedestal-mounted UR5e with a Robotiq 2F-85 gripper that picks colour-coded parts from a supply bin, routes over a divider wall, and stacks them onto a pallet.
 
@@ -77,7 +80,7 @@ It is built the way a production cell is: **Pilz Industrial Motion Planner** `LI
 - The [technical report](docs/TECHNICAL_REPORT.md) covers all four phases.
 - To run the cell, follow the README in `moveit-ur5-pick-place`.
 
-## Run it
+## ▶️ Run it
 
 ```bash
 uv run --group dev pytest                        # 111 tests with the sim extras, 93 without
@@ -89,11 +92,11 @@ uv run --group sim python apps/pick_and_place_mujoco.py --save     # the single 
 
 (or the classic path: `pip install numpy matplotlib pytest`, then `python apps/pick_and_place.py`; add `pip install mujoco imageio pillow` for the MuJoCo demos.)
 
-## Why damped least squares
+## 🧮 Why damped least squares
 
 The clean way to invert the Jacobian is the Moore-Penrose pseudo-inverse, `dq = J^+ e`. It works right up until the arm approaches a singularity, where the Jacobian loses rank, `J J^T` becomes ill-conditioned, and the commanded joint velocities explode. Damped least squares trades a small amount of tracking accuracy for stability: the `lambda^2 I` term bounds the step no matter how singular the configuration. The UR5's fully-extended home pose is a real singularity, so the solver is tested seeded from exactly there and required to stay finite and make progress, not diverge.
 
-## Layout
+## 📁 Layout
 
 ```
 src/armik/
@@ -115,7 +118,7 @@ tests/
   test_ur5e.py           UR5e FK golden (vs MuJoCo), IK round-trip
 ```
 
-## Choosing one solution, and measuring whether it helps
+## 🎯 Choosing one solution, and measuring whether it helps
 
 `analytical_ik` returns every closed-form solution for a pose, which is the right answer to a mathematical question and the wrong thing to hand a controller: a robot executes one configuration. `armik.select` scores the candidates on joint travel, singularity margin and joint-limit margin, and returns one.
 
@@ -135,7 +138,7 @@ Chaining alone cuts the median step threefold and halves the discontinuous paths
 
 **The first version of this cost was wrong, and the benchmark is what caught it.** The margin terms were reciprocals, so at the median manipulability of 1.6e-2 the singularity term contributed 0.6/0.016 = 37 against a travel term of order 0.05 for an adjacent waypoint. Travel was arithmetically irrelevant and the resulting path was *less* continuous than the naive selector, at 3.16 rad against 0.07. Both margins are now bounded penalties in [0, 1]. A cost whose terms are not commensurate is not a weighting, it is one term with decoration.
 
-## Solver benchmarks
+## 📊 Solver benchmarks
 
 Every figure is generated from `docs/ik_benchmark.csv`, so a number in the report and a point on a plot cannot disagree.
 
@@ -144,7 +147,7 @@ Every figure is generated from `docs/ik_benchmark.csv`, so a number in the repor
 
 Over 600 random poses, seeded 0.6 rad away from the answer: **95% converge**, median 7 iterations and p95 92, p95 position error **0.099 mm**. The analytic solver returns all branches in a median 0.7 ms against 1.6 ms for damped least squares, and the interesting part is the tail rather than the median: DLS p95 is 44 ms, because a badly conditioned pose costs an order of magnitude more than a typical one. **Failure is not spread evenly**: it lives almost entirely in the lowest manipulability band, which is the argument for reporting the distribution rather than one success rate.
 
-## Redundancy: a seventh joint, and what to do with it
+## 🔄 Redundancy: a seventh joint, and what to do with it
 
 A pose is six numbers. A 6R arm reaches it in a finite set of configurations,
 and the section above picks between them. A **7R arm has a continuum**: at every
@@ -199,7 +202,7 @@ trading a little accuracy for a bounded command near a singularity is the point.
 Putting it in the projector leaks secondary motion straight into task error,
 which is the one thing the projector exists to prevent.
 
-## Planners: the ones here against the ones people ship
+## ⚖️ Planners: the ones here against the ones people ship
 
 Three of the four planner families below are implemented in this repository.
 The comparison is not "which planner is best", it is whether a hand-written
@@ -284,13 +287,33 @@ are the trade-offs, not a ranking.
 
 ![planner comparison](docs/planner_comparison.png)
 
-## Roadmap
+## 💡 What I learned
+
+- **Writing the kinematics from scratch is what made the library make sense.** Calling
+  a solver teaches you its API. Deriving the Jacobian and watching it lose rank near a
+  singularity teaches you why the solver behaves the way it does when a real robot gets
+  close to one.
+
+- **A singularity is not an edge case you code around, it is a property of the arm.**
+  Damped least squares is not a trick to avoid a crash, it is a deliberate trade of
+  accuracy for stability exactly where the unmodified inverse blows up.
+
+- **Six joints usually give you more than one answer, and the choice matters.**
+  Picking a solution at random makes the arm flip between branches between waypoints.
+  Choosing for continuity, and then measuring whether that choice actually helped,
+  turned an invisible decision into a result.
+
+- **Benchmarking my planners against the ones people actually ship was uncomfortable
+  and necessary.** It is the section that tells a reader what this code is for:
+  understanding, not replacing OMPL.
+
+## 🔭 Future improvements
 
 - **Set `longest_valid_segment_fraction` and re-run the comparison.** The planner table above found six of 52 OMPL paths carrying a collision strictly between waypoints, against 30 mm obstacles, at the MoveIt default. The fix is one parameter and the measurement to check it against already exists, which makes this the cheapest real experiment left here.
 - **Give the optimisers a better initial guess.** CHOMP and STOMP solved 14 and 13 of 20 while both sampling planners solved more, and an optimiser handed a straight line that is deep in collision is being asked to start from the worst possible place. Seeding them from an RRT-Connect path would separate "the optimiser is weak" from "the initialisation was".
 
 Not doing: **no second ROS workspace here.** The duplicated one was removed and `moveit-ur5-pick-place` owns that story. This repository answers one question, whether the manipulator mathematics is understood.
 
-## License
+## 📄 License
 
 MIT
