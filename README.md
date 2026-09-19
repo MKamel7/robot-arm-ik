@@ -13,6 +13,16 @@ Inverse kinematics and trajectory planning for a 6-DOF serial manipulator (the U
 
 ![pick and place animation](docs/pick_and_place.gif)
 
+## 🛠️ Built with
+
+| | |
+| --- | --- |
+| **Maths** | NumPy, kinematics and Jacobians written from the ground up |
+| **Solvers** | Damped least squares, redundancy resolution |
+| **Simulation** | MuJoCo, ROS 2 and MoveIt 2 for the palletizing cell |
+| **Robot** | Universal Robots UR5 and UR5e |
+| **Engineering** | Benchmarks against shipped planners, GitHub Actions CI |
+
 ## ⚙️ What it does
 
 Four independent pieces, each a distinct capability:
@@ -317,3 +327,9 @@ Not doing: **no second ROS workspace here.** The duplicated one was removed and 
 ## 📄 License
 
 MIT
+
+---
+
+Built by **Mo Kamel**, M.Eng. Mechatronic and Cyber-Physical Systems, Technische
+Hochschule Deggendorf.
+[Portfolio](https://mkamel7.github.io) · [LinkedIn](https://linkedin.com/in/mo-kamel7)
