@@ -16,8 +16,9 @@ and the count is exactly what the documents claim. Collection does not execute
 tests, so this cannot recurse.
 
 THE COUNT DEPENDS ON THE ENVIRONMENT, which the first version of this file got
-wrong and CI caught. `test_palletizing_cell.py` and `test_ur5e_mujoco.py` are
-skipped at module level without the `sim` extras, so they are never collected:
+wrong and CI caught. `test_palletizing_cell.py` and `test_physics_control.py`
+are skipped at module level without the `sim` extras, so they are never
+collected (`test_ur5e_mujoco.py` skips per test and is still collected):
 53 items on the plain `test` job against 70 with MuJoCo installed. A single
 documented number cannot be true in both, so the documents state the FULL
 suite and this gate only enforces where the full suite exists. The `mujoco-sim`
@@ -55,7 +56,7 @@ def collected_tests() -> int:
 
 #: The two files skipped at module level when mujoco is absent. Named here so
 #: the without-sim figure is DERIVED rather than remembered.
-SIM_ONLY = ("tests/test_palletizing_cell.py", "tests/test_ur5e_mujoco.py")
+SIM_ONLY = ("tests/test_palletizing_cell.py", "tests/test_physics_control.py")
 
 
 def sim_only_tests() -> int:

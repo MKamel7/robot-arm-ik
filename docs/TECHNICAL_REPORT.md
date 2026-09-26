@@ -28,7 +28,7 @@ with a camera closing the loop.
 - **Inverse kinematics** two ways: a damped-least-squares numerical solver
   (`dq = J^T (J J^T + lambda^2 I)^-1 e`) that stays stable through singularities,
   and a closed-form analytic solver returning all eight branches. Over 2000 random
-  poses, every analytic branch reproduces the target through FK to ~1e-13, and the
+  poses, every analytic branch reproduces the target through FK to 1e-12 or better, and the
   numerical solver is verified to land on one of them.
 - **Motion planning**: a joint-space **RRT-Connect** (two-tree EXTEND/CONNECT +
   shortcutting) replaces a lift-over heuristic when the direct path is blocked,
@@ -37,8 +37,8 @@ with a camera closing the loop.
   qfrc_bias`) tracks the planned trajectory under real MuJoCo dynamics; grasp is a
   weld equality constraint. Kinematic playback remains the default.
 
-Suite: 111 tests with the `sim` extras installed (93 without, since the MuJoCo files are skipped at module level). A randomised-layout benchmark reports 100% success over 50
-layouts with ~0.093 mm placement residual (the IK solver's own error).
+Suite: 111 tests with the `sim` extras installed (94 without, since the two MuJoCo-only files are skipped at module level). A randomised-layout benchmark reports 100% success over 50
+layouts with ~0.099 mm placement residual (the IK solver's own error).
 
 ## 3. Industrial palletizing cell (Phase 2)
 
@@ -58,7 +58,7 @@ than one general-purpose sampling planner (see `ros2/docs/ENGINEERING_PLAN.md`):
 - Reachability pre-check, back-to-front filling, and printed production metrics.
 
 An initial naive version (OMPL, position-only goals) ran at ~100 s/part and 2/4;
-the industrial rewrite is **4/4, 0 re-plans, ~10 s/part**, an order of magnitude
+the industrial rewrite is **4/4, 0 re-plans, 7.6 s/part**, an order of magnitude
 faster and reliable. The arm is mounted on a pedestal so it works downward over
 the cell, the standard industrial layout.
 
@@ -86,7 +86,7 @@ pick-and-place**, 4/4 with per-part grasp orientation.
   execution (Phase 1, MuJoCo) is a separate, opt-in path.
 - Perception is classical colour+depth on saturated primaries; it does not handle
   texture, clutter, or occlusion, and cube yaw is only defined modulo 90 degrees.
-- Cycle time (~10 s/part) is dominated by OMPL planning on a CPU, not by the
+- Cycle time (7.6 s/part with known bin positions, ~10 s/part with perception) is dominated by OMPL planning on a CPU, not by the
   (scaled-down) execution speed.
 
 ## 6. Reproducing
